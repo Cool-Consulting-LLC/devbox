@@ -1,0 +1,14 @@
+# The binary and release builds. `make build` and `make release` recreate them.
+/devbox
+/dist/
+
+# Your own config. devbox.example.yaml is the committed template, and
+# `make setup` copies it here.
+/devbox.yaml
+
+# The machine key, if docs/01-first-run.md step 4 is interrupted before the
+# private half is shredded. It must never be committed.
+devbox_ed25519
+devbox_ed25519.pub
+
+.DS_Store

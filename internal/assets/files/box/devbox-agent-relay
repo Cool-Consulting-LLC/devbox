@@ -1,0 +1,130 @@
+#!/usr/bin/python3
+"""Share the root ssh-agent with the box's admins.
+
+ssh-agent refuses any peer whose uid is neither its own nor root, so a root
+agent cannot serve OS Login users directly. This root relay owns the shared
+socket, reads each peer's uid from the kernel (SO_PEERCRED), and forwards only
+admins: root, users OS Login says hold adminLogin right now (asked of the
+metadata server, the same source the OS Login PAM module uses), and members of
+the local sudo or google-sudoers groups. Anyone else is refused. The rule is
+"can sudo", because anyone who can sudo can read the key anyway.
+"""
+import grp
+import json
+import os
+import pwd
+import socket
+import struct
+import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
+
+LISTEN = "/run/devbox/ssh-agent.sock"
+AGENT = "/run/devbox-agent/agent.sock"
+ADMIN_GROUPS = {"sudo", "admin", "google-sudoers"}
+OSLOGIN = "http://metadata.google.internal/computeMetadata/v1/oslogin/"
+CACHE_SECONDS = 60
+_cache = {}
+_cache_lock = threading.Lock()
+
+
+def _metadata(path):
+    req = urllib.request.Request(OSLOGIN + path, headers={"Metadata-Flavor": "Google"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return json.load(r)
+
+
+def oslogin_admin(uid):
+    """True if OS Login grants this uid adminLogin on this instance, now."""
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(uid)
+        if hit and now - hit[1] < CACHE_SECONDS:
+            return hit[0]
+    try:
+        name = _metadata(f"users?uid={uid}")["loginProfiles"][0]["name"]
+        q = urllib.parse.urlencode({"email": name, "policy": "adminLogin"})
+        ok = bool(_metadata(f"authorize?{q}").get("success"))
+    except Exception:  # not an OS Login user, or the metadata server said no
+        ok = False
+    with _cache_lock:
+        _cache[uid] = (ok, now)
+    return ok
+
+
+def is_admin(uid):
+    if uid == 0:
+        return True
+    if oslogin_admin(uid):
+        return True
+    try:
+        pw = pwd.getpwuid(uid)
+    except KeyError:
+        return False
+    try:
+        gids = os.getgrouplist(pw.pw_name, pw.pw_gid)
+    except OSError:
+        return False
+    for gid in gids:
+        try:
+            if grp.getgrgid(gid).gr_name in ADMIN_GROUPS:
+                return True
+        except KeyError:
+            pass
+    return False
+
+
+def pump(src, dst):
+    try:
+        while True:
+            data = src.recv(65536)
+            if not data:
+                break
+            dst.sendall(data)
+    except OSError:
+        pass
+    finally:
+        for s in (src, dst):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+def handle(client):
+    try:
+        _, uid, _ = struct.unpack("3i", client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        if not is_admin(uid):
+            print(f"refused uid {uid}: not an admin", file=sys.stderr, flush=True)
+            return
+        agent = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        agent.connect(AGENT)
+        back = threading.Thread(target=pump, args=(agent, client), daemon=True)
+        back.start()
+        pump(client, agent)
+        back.join()
+        agent.close()
+    except OSError as e:
+        print(f"connection failed: {e}", file=sys.stderr, flush=True)
+    finally:
+        client.close()
+
+
+def main():
+    try:
+        os.unlink(LISTEN)
+    except FileNotFoundError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(LISTEN)
+    os.chmod(LISTEN, 0o666)  # the uid check above is the gate, not the mode
+    srv.listen(32)
+    while True:
+        conn, _ = srv.accept()
+        threading.Thread(target=handle, args=(conn,), daemon=True).start()
+
+
+if __name__ == "__main__":
+    main()

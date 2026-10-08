@@ -1,0 +1,105 @@
+package config
+
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+const minimal = `
+project_id: my-devbox-project
+git: {name: A, email: a@example.com}
+`
+
+func TestExampleParses(t *testing.T) {
+	data, err := os.ReadFile("../../devbox.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Region() != "europe-west4" || c.SAEmail() != "devbox@my-devbox-project.iam.gserviceaccount.com" {
+		t.Fatalf("derived values wrong: %s %s", c.Region(), c.SAEmail())
+	}
+}
+
+func TestDefaults(t *testing.T) {
+	c, err := Parse([]byte(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Name != "devbox" || c.MachineType != "e2-standard-2" || c.CodeDiskGB != 50 || !c.WantExternalIP() || !c.IdleEnabled() {
+		t.Fatalf("defaults not applied: %+v", c)
+	}
+}
+
+func TestRejects(t *testing.T) {
+	cases := map[string]string{
+		"create_project":  "create_project: true\ngit: {name: A, email: a@b.c}",
+		"both":            minimal + "create_project: true",
+		"missing project": "git: {name: A, email: a@b.c}",
+		"unknown key":     minimal + "colour: blue",
+		"open internet":   minimal + "break_glass: {enabled: true, source_cidr: 0.0.0.0/0}",
+		"empty cidr":      minimal + "break_glass: {enabled: true}",
+		"wide cidr":       minimal + "break_glass: {enabled: true, source_cidr: 10.0.0.0/8}",
+		"host bits":       minimal + "break_glass: {enabled: true, source_cidr: 1.2.3.4/24}",
+		"secret prefix":   minimal + "tailscale: {oauth_secret: ts-oauth}",
+		"bad name":        minimal + "name: Dev_Box",
+		"short name":      minimal + "name: dev",
+		"snapshot time":   minimal + "snapshots: {start_time: '03:30'}",
+		"idle vs high":    minimal + "alerts: {cpu_idle_pct: 90, cpu_high_pct: 80}",
+		"bad zone":        minimal + "zone: frankfurt",
+		"bad package":     minimal + "extra_packages: ['rm -rf /']",
+	}
+	for name, y := range cases {
+		if _, err := Parse([]byte(y)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestAccepts(t *testing.T) {
+	for _, y := range []string{
+		minimal + "break_glass: {enabled: true, source_cidr: 203.0.113.7/32}",
+		minimal + "break_glass: {enabled: true, source_cidr: '2001:db8::/64', allow_mosh: true}",
+		minimal + "break_glass: {enabled: false, source_cidr: 0.0.0.0/0}", // ignored when disabled
+		minimal + "external_ip: false\nidle_suspend: {enabled: false}",
+		minimal + "extra_packages: [nodejs, python3-venv, golang-1.22]",
+	} {
+		if _, err := Parse([]byte(y)); err != nil {
+			t.Errorf("rejected %q: %v", y, err)
+		}
+	}
+}
+
+func TestDescribeCoversEveryKey(t *testing.T) {
+	var b strings.Builder
+	if err := WriteMarkdown(&b); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range Keys() {
+		if k.Describe == "" || k.Tier == "" {
+			t.Errorf("%s: missing describe or tier tag", k.Path)
+		}
+		if _, ok := tierText[k.Tier]; !ok {
+			t.Errorf("%s: unknown tier %q", k.Path, k.Tier)
+		}
+		if !strings.Contains(b.String(), "`"+k.Path+"`") {
+			t.Errorf("%s missing from markdown", k.Path)
+		}
+	}
+}
+
+func TestGeneratedDocIsCurrent(t *testing.T) {
+	var b strings.Builder
+	_ = WriteMarkdown(&b)
+	have, err := os.ReadFile("../../docs/02-config.md")
+	if err != nil {
+		t.Skip("docs/02-config.md not generated yet")
+	}
+	if string(have) != b.String() {
+		t.Fatal("docs/02-config.md is stale: run `make docs`")
+	}
+}

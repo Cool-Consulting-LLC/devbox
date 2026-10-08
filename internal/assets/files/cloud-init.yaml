@@ -1,0 +1,138 @@
+#cloud-config
+# Replace tier: any change to this file recreates the instance on `devbox apply`.
+# Keep it minimal. Everything that can live in provision.sh lives there.
+
+package_update: true
+packages:
+  - apt-transport-https
+  - build-essential
+  - ca-certificates
+  - cloud-guest-utils
+  - curl
+  - direnv
+  - fd-find
+  - git
+  - gnupg
+  - jq
+  - mosh
+  - ripgrep
+  - rsync
+  - syncthing
+  - tmux
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-devbox.conf
+    permissions: "0644"
+    content: |
+      # devbox: hardened unconditionally, so the break-glass firewall is safe to open.
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      MaxAuthTries 3
+      LoginGraceTime 20
+      X11Forwarding no
+      AllowTcpForwarding yes
+      KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org
+      Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com
+      MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+
+  - path: /etc/claude-code/managed-settings.json
+    permissions: "0644"
+    content: |
+{{ indent 6 .ManagedSettings }}
+
+  - path: /etc/claude-code/hooks/guard.sh
+    permissions: "0755"
+    content: |
+{{ indent 6 .GuardHook }}
+
+  - path: /usr/local/sbin/devbox-bootstrap
+    permissions: "0755"
+    content: |
+{{ indent 6 .Bootstrap }}
+
+  - path: /etc/systemd/system/devbox-ssh-agent.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=devbox system ssh-agent (root-only socket)
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      ExecStartPre=/usr/bin/install -d -m 0700 /run/devbox-agent
+      ExecStartPre=/bin/rm -f /run/devbox-agent/agent.sock
+      ExecStart=/usr/bin/ssh-agent -D -a /run/devbox-agent/agent.sock
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/devbox-ssh-agent-relay.service
+    permissions: "0644"
+    content: |
+      # ssh-agent refuses peers whose uid is neither its own nor root, so a root agent
+      # cannot serve OS Login users directly. The relay owns the shared socket and
+      # forwards only admins, checked by uid. The script is reprovision tier:
+      # provision.sh writes /usr/local/sbin/devbox-agent-relay and restarts this.
+      [Unit]
+      Description=devbox ssh-agent relay for admins
+      Requires=devbox-ssh-agent.service
+      After=devbox-ssh-agent.service google-guest-agent.service
+      ConditionPathExists=/usr/local/sbin/devbox-agent-relay
+
+      [Service]
+      Type=simple
+      ExecStartPre=/usr/bin/install -d -m 0755 /run/devbox
+      ExecStart=/usr/local/sbin/devbox-agent-relay
+      Restart=always
+      RestartSec=2
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/devbox-provision.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=devbox provisioning
+      After=google-guest-agent.service network-online.target devbox-ssh-agent-relay.service srv-code.mount
+      Wants=network-online.target
+      RequiresMountsFor=/srv/code
+
+      [Service]
+      Type=oneshot
+      ExecStart=/srv/code/.devbox/provision.sh
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/devbox-idle.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=devbox idle check
+      ConditionPathExists=/srv/code/.devbox/idle-check.sh
+
+      [Service]
+      Type=oneshot
+      EnvironmentFile=-/run/devbox/config.env
+      ExecStart=/bin/sh -c 'exec /srv/code/.devbox/idle-check.sh "$${DEVBOX_IDLE_MINUTES:-60}"'
+
+  - path: /etc/systemd/system/devbox-idle.timer
+    permissions: "0644"
+    content: |
+      # Enabled or disabled by provision.sh from idle_suspend.enabled.
+      [Unit]
+      Description=devbox idle check every 5 minutes
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  - [/usr/local/sbin/devbox-bootstrap]

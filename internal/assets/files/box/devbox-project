@@ -1,0 +1,67 @@
+#!/bin/bash
+# Box-side half of `devbox project`. Runs as the login user over SSH.
+#   devbox-project add <repo> <dir> [KEY=VALUE ...]
+#   devbox-project secret-ref <dir> <KEY> <secret-id>
+#   devbox-project secret-unref <dir> <KEY>
+set -euo pipefail
+export SSH_AUTH_SOCK=/run/devbox/ssh-agent.sock
+# Over a plain `ssh host command` no login profile runs, so enroll here too.
+[ -e "/srv/code/.devbox/enrolled/$(id -u)" ] || sudo -n /usr/local/sbin/devbox-enroll >/dev/null
+die() { echo "devbox-project: $*" >&2; exit 1; }
+
+# upsert FILE KEY VALUE: replace KEY's line or append it.
+upsert() {
+  local f=$1 k=$2 v=$3 tmp
+  tmp=$(mktemp "$f.XXXX")
+  { grep -v "^$k=" "$f" 2>/dev/null || true; printf '%s=%s\n' "$k" "$v"; } > "$tmp"
+  mv "$tmp" "$f"
+}
+
+# The env block agents get. Never secrets: nothing resolves @secret: there.
+settings() {
+  local dir=$1 f=$1/.claude/settings.local.json
+  mkdir -p "$dir/.claude"
+  [ -f "$f" ] || echo '{}' > "$f"
+  { grep -v -e '^#' -e '^$' -e '=@secret:' -e '^DEVBOX_' "$dir/.devbox-env" || true; } \
+    | jq -R 'capture("^(?<k>[A-Za-z_][A-Za-z0-9_]*)=(?<v>.*)$")' \
+    | jq -s --slurpfile cur "$f" '$cur[0] * {env: (map({(.k): .v}) | add // {})}' > "$f.new"
+  mv "$f.new" "$f"
+}
+
+exclude() {
+  local dir=$1
+  [ -d "$dir/.git" ] || return 0
+  for p in .devbox-env .env .claude/settings.local.json; do
+    grep -qxF "$p" "$dir/.git/info/exclude" 2>/dev/null || echo "$p" >> "$dir/.git/info/exclude"
+  done
+}
+
+case ${1:-} in
+  add)
+    repo=${2:?repo} name=${3:?dir}; shift 3
+    dir=/srv/code/$name
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad directory name $name"
+    if [ -d "$dir/.git" ]; then echo "$dir already cloned"; else git clone "$repo" "$dir"; fi
+    touch "$dir/.devbox-env"; chmod 600 "$dir/.devbox-env"
+    for kv in "$@"; do upsert "$dir/.devbox-env" "${kv%%=*}" "${kv#*=}"; done
+    settings "$dir"; exclude "$dir"
+    QUIET=1 devbox-sessions
+    echo "$dir ready; tmux session: ${name//./_}"
+    ;;
+  secret-ref)
+    dir=/srv/code/${2:?dir} key=${3:?key} id=${4:?secret id}
+    [ -d "$dir" ] || die "$dir does not exist; run devbox project add first"
+    upsert "$dir/.devbox-env" "$key" "@secret:$id"
+    echo "$dir/.devbox-env: $key=@secret:$id"
+    echo "running sessions keep the old value until: devbox-sessions --recreate ${2//./_}"
+    ;;
+  secret-unref)
+    dir=/srv/code/${2:?dir} key=${3:?key}
+    [ -f "$dir/.devbox-env" ] || die "$dir/.devbox-env does not exist"
+    tmp=$(mktemp "$dir/.devbox-env.XXXX")
+    grep -v "^$key=" "$dir/.devbox-env" > "$tmp" || true
+    mv "$tmp" "$dir/.devbox-env"
+    echo "$dir/.devbox-env: removed $key"
+    ;;
+  *) die "usage: devbox-project add|secret-ref|secret-unref ..." ;;
+esac

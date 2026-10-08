@@ -1,0 +1,23 @@
+#!/bin/bash
+# devbox-enroll: give the calling admin read-write access to /srv/code. Run as
+# root through `sudo -n` from /etc/profile.d/devbox.sh at login, once per user.
+# OS Login grants sudo through /var/google-sudoers.d/<user>, not a group, so access
+# is an ACL on the user's uid. ACLs live on the pet disk and OS Login uids are
+# stable, so this survives every replacement.
+set -euo pipefail
+u=${SUDO_USER:?run through sudo}
+uid=${SUDO_UID:?run through sudo}
+[ "$uid" != 0 ] || exit 0
+# Keyed by uid: OS Login uids are stable, usernames can be renamed.
+mark=/srv/code/.devbox/enrolled/$uid
+[ -e "$mark" ] && exit 0
+
+setfacl -m "u:$uid:rwx" -m "d:u:$uid:rwx" /srv/code
+# Everything already on the disk except the binary's own directory.
+find /srv/code -mindepth 1 -maxdepth 1 ! -name '.devbox' ! -name 'lost+found' \
+  -exec setfacl -R -m "u:$uid:rwX" -m "d:u:$uid:rwX" {} +
+install -d -m 0700 -o "$u" -g "$(id -gn "$u")" "/srv/code/.home/$u"
+
+install -d -m 0755 /srv/code/.devbox/enrolled
+date -Is > "$mark"
+echo "devbox-enroll: $u can now write /srv/code"

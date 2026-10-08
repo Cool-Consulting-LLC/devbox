@@ -1,0 +1,47 @@
+# devbox.yaml. Exactly one of project_id or create_project.
+# Every key is documented in docs/02-config.md, including which change tier it triggers.
+project_id: my-devbox-project
+create_project: false            # BACKLOGGED. Refuses today.
+
+zone: europe-west4-a             # region is derived
+name: devbox
+
+network:
+  name: default                  # an existing VPC in this project
+  subnet: default
+
+machine_type: e2-standard-2
+external_ip: true
+code_disk_gb: 50
+boot_disk_gb: 30
+extra_packages: []               # runtimes, e.g. [nodejs, python3-venv]
+
+git:
+  name: "Svyatoslav I. Maslennikov"
+  email: me@smaslennikov.com
+
+tailscale:
+  tag: tag:devbox
+  oauth_secret: devbox-tailscale-oauth   # Secret Manager name
+
+ssh_key:
+  secret: devbox-ssh-key                 # Secret Manager name
+
+snapshots:
+  start_time: "03:00"            # UTC
+  retention_days: 14
+
+alerts:
+  email: slava@coolconsulting.lol
+  cpu_high_pct: 80               # sustained 5m
+  cpu_idle_pct: 5                # sustained 6h: idle suspend has failed
+  disk_used_pct: 85
+
+idle_suspend:
+  enabled: true
+  after_minutes: 60
+
+break_glass:
+  enabled: false
+  source_cidr: ""                # your public IP as /32, never 0.0.0.0/0
+  allow_mosh: false              # adds udp:60000-61000

@@ -1,0 +1,44 @@
+# Checks that need no credentials and no network.
+#
+# Every step shells out to the same make target a person runs locally. A
+# pipeline that reimplements the commands drifts from them, and the first you
+# hear of it is a green CI and a broken laptop, or the reverse.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  # Supersede an in-flight run of the same branch: nobody needs the result of
+  # a commit that has already been replaced.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# GitHub's default job timeout is six hours. Nothing here takes more than a
+# couple of minutes, so anything longer is stuck, not slow.
+jobs:
+  check:
+    name: Lint, test, docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # ubuntu-latest ships shellcheck and jq, so the box scripts are linted
+      # and the guard hook test runs here even if a laptop skips them.
+      # The flow tests run against an in-memory GCP fake: no project needed.
+      - run: make lint
+      - run: make test
+      - run: make docs-check
+
+      # The deliverable is a static binary for each platform; prove it builds.
+      - run: make release

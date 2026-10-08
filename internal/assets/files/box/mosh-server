@@ -1,0 +1,10 @@
+#!/bin/bash
+# /usr/local/bin/mosh-server: the real one, with a timeout. A mosh-server whose
+# client has vanished (laptop asleep, network gone) otherwise runs forever, and the
+# idle check counts it as busy, so the box would never suspend. After the idle
+# threshold with no client contact it exits; tmux keeps the work.
+if [ -z "${MOSH_SERVER_NETWORK_TMOUT:-}" ]; then
+  minutes=$(. /run/devbox/config.env 2>/dev/null; echo "${DEVBOX_IDLE_MINUTES:-60}")
+  export MOSH_SERVER_NETWORK_TMOUT=$(( minutes * 60 ))
+fi
+exec /usr/bin/mosh-server "$@"
