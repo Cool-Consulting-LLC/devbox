@@ -233,7 +233,7 @@ func reprovisionCmd(g *globals) *cobra.Command {
 		Long: `Updates the instance metadata from devbox.yaml, pushes the provision.sh embedded in
 this binary to /srv/code/.devbox/provision.sh over SSH, and runs it. No
 replacement, no lost session. Use it after editing provision.sh or any
-reprovision-tier key (see docs/02-config.md).`,
+reprovision-tier key (see docs/config.md).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
@@ -327,7 +327,7 @@ func configCmd() *cobra.Command {
 	var describe bool
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Describe devbox.yaml (--describe writes docs/02-config.md)",
+		Short: "Describe devbox.yaml (--describe writes docs/config.md)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !describe {

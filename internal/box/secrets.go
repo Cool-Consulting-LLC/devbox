@@ -36,7 +36,7 @@ func (b *Box) checkSecrets(ctx context.Context, p *Plan) error {
 			return fmt.Errorf("secret %s: %w", id, err)
 		}
 		if !ok {
-			p.warn("secret %s is missing; provision.sh will fail until it exists (docs/01-first-run.md)", id)
+			p.warn("secret %s is missing; provision.sh will fail until it exists (README.md, How to set it up)", id)
 		}
 	}
 	return nil

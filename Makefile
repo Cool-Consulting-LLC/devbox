@@ -37,7 +37,7 @@ setup: ## Everything a fresh clone needs: modules, the binary, a devbox.yaml to 
 	@[ -f devbox.yaml ] || { cp devbox.example.yaml devbox.yaml; echo "created devbox.yaml from the example"; }
 	@echo
 	@echo "  Set project_id, git.name, git.email and alerts.email in devbox.yaml, then"
-	@echo "  follow docs/01-first-run.md from step 2."
+	@echo "  follow README.md, How to set it up, from step 2."
 	@echo
 
 test: ## Run the test suite (no credentials or network; GCP is an in-memory fake)
@@ -53,14 +53,14 @@ lint: ## Vet, check formatting, and shellcheck the box scripts if shellcheck is 
 fmt: ## Reformat Go
 	gofmt -w $(GITROOT)
 
-# docs/02-config.md is generated from the config struct tags, so it cannot
+# docs/config.md is generated from the config struct tags, so it cannot
 # drift from the code. A reference that can drift is worse than none.
-docs: ## Regenerate docs/02-config.md. Never edit it by hand
-	go run ./cmd/devbox config --describe > docs/02-config.md
+docs: ## Regenerate docs/config.md. Never edit it by hand
+	go run ./cmd/devbox config --describe > docs/config.md
 
-docs-check: ## Fail if docs/02-config.md is stale
-	@go run ./cmd/devbox config --describe | diff -u docs/02-config.md - \
-		&& echo "docs/02-config.md is current"
+docs-check: ## Fail if docs/config.md is stale
+	@go run ./cmd/devbox config --describe | diff -u docs/config.md - \
+		&& echo "docs/config.md is current"
 
 check: lint test docs-check ## Lint + test + docs
 
@@ -91,7 +91,7 @@ clean: ## Remove ./devbox and dist/
 
 .PHONY: auth
 # The binary uses Application Default Credentials, not the gcloud CLI login,
-# so both are needed: the CLI for the runbooks' gcloud commands, ADC for devbox.
+# so both are needed: the CLI for the README's gcloud commands, ADC for devbox.
 auth: ## Log in to gcloud and create Application Default Credentials
 	gcloud auth login
 	gcloud auth application-default login

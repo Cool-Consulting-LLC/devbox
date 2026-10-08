@@ -90,7 +90,7 @@ func (b *Box) planSuspendRole(ctx context.Context, p *Plan) error {
 				},
 			}).Context(ctx).Do()
 			if gcp.Code(err) == 400 {
-				return fmt.Errorf("%w\nthe role ID %s was deleted more than 7 days ago and cannot be reused for 37 days; see docs/03-teardown.md", err, config.SuspendRoleID)
+				return fmt.Errorf("%w\nthe role ID %s was deleted more than 7 days ago and cannot be reused for 37 days; destroy --all deleted it, and only `devbox up` within 7 days can undelete it", err, config.SuspendRoleID)
 			}
 			return err
 		}})

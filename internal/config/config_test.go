@@ -95,11 +95,11 @@ func TestDescribeCoversEveryKey(t *testing.T) {
 func TestGeneratedDocIsCurrent(t *testing.T) {
 	var b strings.Builder
 	_ = WriteMarkdown(&b)
-	have, err := os.ReadFile("../../docs/02-config.md")
+	have, err := os.ReadFile("../../docs/config.md")
 	if err != nil {
-		t.Skip("docs/02-config.md not generated yet")
+		t.Skip("docs/config.md not generated yet")
 	}
 	if string(have) != b.String() {
-		t.Fatal("docs/02-config.md is stale: run `make docs`")
+		t.Fatal("docs/config.md is stale: run `make docs`")
 	}
 }

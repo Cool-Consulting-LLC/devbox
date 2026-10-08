@@ -139,8 +139,8 @@ func (b *Box) Preflight(ctx context.Context, fix bool, w io.Writer) (*PreflightR
 	b.checkMachine(ctx, add)
 
 	for _, s := range []struct{ id, hint string }{
-		{b.C.Tailscale.OAuthSecret, "create it: docs/01-first-run.md, Tailscale step 3"},
-		{b.C.SSHKey.Secret, "create it: docs/01-first-run.md, machine key step"},
+		{b.C.Tailscale.OAuthSecret, "create it: README.md, How to set it up, step 3"},
+		{b.C.SSHKey.Secret, "create it: README.md, How to set it up, step 4"},
 	} {
 		ok, err := b.SecretExists(ctx, s.id)
 		switch {

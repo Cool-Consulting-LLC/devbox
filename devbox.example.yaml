@@ -1,5 +1,5 @@
 # devbox.yaml. Exactly one of project_id or create_project.
-# Every key is documented in docs/02-config.md, including which change tier it triggers.
+# Every key is documented in docs/config.md, including which change tier it triggers.
 project_id: my-devbox-project
 create_project: false            # BACKLOGGED. Refuses today.
 

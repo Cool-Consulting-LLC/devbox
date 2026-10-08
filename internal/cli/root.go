@@ -1,5 +1,5 @@
 // Package cli is the devbox command line. Each command's help text must agree
-// with its runbook in docs/; when they drift, the help text is wrong.
+// with README.md; when they drift, the help text is wrong.
 package cli
 
 import (
@@ -44,7 +44,7 @@ tailnet, a pet disk at /srv/code, IAP and break-glass ways in, and alerts.
 Stateless: resources are found by the label devbox=<name> and the prefix <name>-.
 
 Credentials: Application Default Credentials (gcloud auth application-default login).
-Runbooks: docs/01-first-run.md through docs/06-projects-and-secrets.md.`,
+Docs: README.md (what it does, how to use it, how to set it up) and docs/config.md.`,
 		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
