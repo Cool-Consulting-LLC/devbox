@@ -87,7 +87,7 @@ if [ "$need_update" = 1 ] || [ -z "$(find /var/lib/apt/lists -maxdepth 0 -mmin -
   apt_get update -q
 fi
 # shellcheck disable=SC2086
-apt_get install -y -q acl claude-code tailscale $DEVBOX_EXTRA_PACKAGES
+apt_get install -y -q acl claude-code golang-go tailscale $DEVBOX_EXTRA_PACKAGES
 
 step ssh-agent
 export SSH_AUTH_SOCK=/run/devbox-agent/agent.sock

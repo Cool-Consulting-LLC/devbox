@@ -3,17 +3,15 @@
 # /usr/local/bin/devbox-claude-statusline; in the devbox repo, .claude/statusline.sh
 # is a symlink to this file. Reads the session JSON on stdin and prints one line.
 #
-#   acme-api ⎇ main* ↑1  client-a@acme-prod/europe-west2  adc ✓ gcloud me@example.com
+#   acme-api ⎇ main* ↑1  client-a@acme-prod/europe-west2  adc ✓
 #   code [███░░░░░░░] 31%  Ctx [███░░░░░░░] 31%  5h [█░░░░░░░░░] 12%  7d [██░░░░░░░░] 20%  $0.42 12m +80/-12  Fable 5.1
 #
 # Segments, each omitted when it does not apply, never an error:
 #   - directory and git state
-#   - on the laptop, in the devbox repo: the box devbox.yaml targets
 #   - in a project session on the box: the gcloud config, project and region
 #     that `devbox project` gave the session
 #   - whether Application Default Credentials exist in that gcloud config,
-#     which is what devbox and most SDKs authenticate with; the CLI's own
-#     account is shown when the ADC file does not name one
+#     which is what devbox and most SDKs authenticate with
 #   - on the box: how full /srv/code is (the alert fires at disk_used_pct)
 #   - context window and rate-limit meters, session cost, wall time and lines
 #     changed, and the model
@@ -84,15 +82,6 @@ meter() {
   printf '%s%s [%s] %s%%%s' "$c" "$1" "$(render_bar "$2" "$WIDTH")" "$(pct_fmt "$2")" "$RESET"
 }
 
-# yaml_scalar KEY FILE -> the top-level scalar for KEY, comment and quotes stripped.
-yaml_scalar() {
-  awk -v k="$1" '
-    $0 ~ "^" k ":" {
-      sub("^" k ":[[:space:]]*", ""); sub(/[[:space:]]+#.*$/, ""); sub(/^#.*$/, "")
-      gsub(/^["'"'"']|["'"'"']$/, ""); print; exit
-    }' "$2" 2>/dev/null
-}
-
 segments=()
 
 # Directory and git state. Project dir is the repo; cwd may be a subdirectory.
@@ -117,15 +106,6 @@ if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 segments+=("$seg")
 
-# Laptop, devbox repo: the box devbox.yaml targets. The binary reads
-# ./devbox.yaml by default, so this is what `./devbox apply` would touch.
-if [ -f "$root/devbox.yaml" ] && [ -f "$root/devbox.example.yaml" ]; then
-  name=$(yaml_scalar name "$root/devbox.yaml")
-  project=$(yaml_scalar project_id "$root/devbox.yaml")
-  zone=$(yaml_scalar zone "$root/devbox.yaml")
-  segments+=("${DIM}▸${RESET} ${name:-devbox}@${project:-?}/${zone:-europe-west4-a}")
-fi
-
 # Box, project session: the identity `devbox project` gave this session.
 # CLOUDSDK_CONFIG is the gcloud config directory, so its name is the identity.
 if [ -n "${CLOUDSDK_CONFIG:-}" ]; then
@@ -137,19 +117,8 @@ fi
 
 # Application Default Credentials: what devbox and the SDKs authenticate as,
 # not the CLI's login. Missing ADC is the usual cause of auth errors.
-gcloud_dir="${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}"
-adc="$gcloud_dir/application_default_credentials.json"
-if [ -f "$adc" ]; then
-  # User ADC usually leaves account empty. Fall back to the CLI's active
-  # account in the same config, normally the same login, and say so.
-  account=$(jq -r '.account // .client_email // empty' "$adc" 2>/dev/null)
-  if [ -n "$account" ]; then
-    segments+=("${DIM}adc${RESET} ${account}")
-  else
-    cfg="${CLOUDSDK_ACTIVE_CONFIG_NAME:-$(cat "$gcloud_dir/active_config" 2>/dev/null)}"
-    cli=$(awk -F' *= *' '/^account/ {print $2; exit}' "$gcloud_dir/configurations/config_${cfg:-default}" 2>/dev/null)
-    segments+=("${DIM}adc${RESET} ✓${cli:+ ${DIM}gcloud ${cli}${RESET}}")
-  fi
+if [ -f "${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}/application_default_credentials.json" ]; then
+  segments+=("${DIM}adc${RESET} ✓")
 else
   segments+=("${RED}no ADC${RESET}")
 fi

@@ -184,7 +184,7 @@ func TestStatusLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	gc := filepath.Join(dir, "gcloud")
-	if err := os.MkdirAll(filepath.Join(gc, "configurations"), 0o755); err != nil {
+	if err := os.MkdirAll(gc, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	run := func(stdin string, env ...string) string {
@@ -198,27 +198,18 @@ func TestStatusLine(t *testing.T) {
 		return string(out)
 	}
 	// Nothing known: still a line, never an error.
-	if out := run("{}"); !strings.Contains(out, "no ADC") || !strings.Contains(out, "gcloud") {
+	if out := run("{}"); !strings.Contains(out, "no ADC") {
 		t.Errorf("empty input: %q", out)
 	}
 	// A project session with ADC: identity, meters, model.
-	for _, f := range []string{"application_default_credentials.json", "active_config", "configurations/config_default"} {
-		body := "{}"
-		if f == "active_config" {
-			body = "default"
-		}
-		if f == "configurations/config_default" {
-			body = "[core]\naccount = me@example.com\n"
-		}
-		if err := os.WriteFile(filepath.Join(gc, f), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(gc, "application_default_credentials.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	in := `{"model":{"display_name":"Opus"},"workspace":{"current_dir":"` + dir + `","project_dir":"` + dir + `"},` +
 		`"context_window":{"used_percentage":31.4},"rate_limits":{"five_hour":{"used_percentage":12}},` +
 		`"cost":{"total_cost_usd":0.42,"total_duration_ms":4521000,"total_lines_added":8,"total_lines_removed":1}}`
 	out := run(in, "CLOUDSDK_CORE_PROJECT=acme-prod", "CLOUDSDK_COMPUTE_REGION=europe-west2")
-	for _, want := range []string{"gcloud@acme-prod/europe-west2", "me@example.com", "Ctx [", "31%", "5h [", "$0.42 1h15m +8/-1", "Opus"} {
+	for _, want := range []string{"gcloud@acme-prod/europe-west2", "✓", "Ctx [", "31%", "5h [", "$0.42 1h15m +8/-1", "Opus"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in %q", want, out)
 		}
