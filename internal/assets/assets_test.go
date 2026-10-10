@@ -209,12 +209,12 @@ func TestStatusLine(t *testing.T) {
 		`"context_window":{"used_percentage":31.4},"rate_limits":{"five_hour":{"used_percentage":12}},` +
 		`"cost":{"total_cost_usd":0.42,"total_duration_ms":4521000,"total_lines_added":8,"total_lines_removed":1}}`
 	out := run(in, "CLOUDSDK_CORE_PROJECT=acme-prod", "CLOUDSDK_COMPUTE_REGION=europe-west2")
-	for _, want := range []string{"gcloud@acme-prod/europe-west2", "✓", "Ctx [", "31%", "5h [", "$0.42 1h15m +8/-1", "Opus"} {
+	for _, want := range []string{"gcloud@acme-prod/europe-west2", "✓", "Ctx 31%", "5h 12%", "$0.42 1h15m +8/-1", "Opus"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in %q", want, out)
 		}
 	}
-	if strings.Contains(out, "no ADC") || strings.Contains(out, "7d [") {
+	if strings.Contains(out, "no ADC") || strings.Contains(out, "7d ") {
 		t.Errorf("unexpected segment in %q", out)
 	}
 }

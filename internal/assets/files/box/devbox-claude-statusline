@@ -4,7 +4,7 @@
 # is a symlink to this file. Reads the session JSON on stdin and prints one line.
 #
 #   acme-api ⎇ main* ↑1  client-a@acme-prod/europe-west2  adc ✓
-#   code [███░░░░░░░] 31%  Ctx [███░░░░░░░] 31%  5h [█░░░░░░░░░] 12%  7d [██░░░░░░░░] 20%  $0.42 12m +80/-12  Fable 5.1
+#   code 31%  Ctx 31%  5h 12%  7d 20%  $0.42 12m +80/-12  Fable 5.1
 #
 # Segments, each omitted when it does not apply, never an error:
 #   - directory and git state
@@ -40,46 +40,19 @@ RESET=$'\033[0m'
 DIM=$'\033[2m'
 BOLD=$'\033[1m'
 RED=$'\033[31m'
+GREEN=$'\033[32m'
 YELLOW=$'\033[33m'
 CYAN=$'\033[36m'
-WIDTH=10
 
-# render_bar PCT WIDTH -> sub-character-resolution block bar (eighths).
-render_bar() {
-  local pct width eighths total_eighths full rem bar i
-  pct=$(awk -v p="$1" 'BEGIN{p=p+0; if(p<0)p=0; if(p>100)p=100; printf "%.0f", p}')
-  width="$2"
-  eighths=(" " "▏" "▎" "▍" "▌" "▋" "▊" "▉" "█")
-  total_eighths=$(( pct * width * 8 / 100 ))
-  full=$(( total_eighths / 8 ))
-  rem=$(( total_eighths % 8 ))
-  bar=""
-  for ((i = 0; i < full; i++)); do bar+="█"; done
-  if (( rem > 0 && full < width )); then
-    bar+="${eighths[$rem]}"
-    full=$((full + 1))
-  fi
-  for ((i = full; i < width; i++)); do bar+="░"; done
-  printf '%s' "$bar"
-}
-
-# color_for PCT -> ANSI color escalating green -> yellow -> red.
-color_for() {
-  local pct
-  pct=$(awk -v p="$1" 'BEGIN{p=p+0; printf "%.0f", p}')
-  if (( pct >= 80 )); then printf '\033[31m'
-  elif (( pct >= 50 )); then printf '\033[33m'
-  else printf '\033[32m'
-  fi
-}
-
-pct_fmt() { awk -v p="$1" 'BEGIN{printf "%.0f", p+0}'; }
-
-# meter LABEL PCT -> "LABEL [bar] NN%" in the colour for PCT.
+# meter LABEL PCT -> "LABEL NN%", green below 50, yellow below 80, red from 80.
 meter() {
-  local c
-  c=$(color_for "$2")
-  printf '%s%s [%s] %s%%%s' "$c" "$1" "$(render_bar "$2" "$WIDTH")" "$(pct_fmt "$2")" "$RESET"
+  local pct c
+  pct=$(awk -v p="$2" 'BEGIN{printf "%.0f", p+0}')
+  if (( pct >= 80 )); then c=$RED
+  elif (( pct >= 50 )); then c=$YELLOW
+  else c=$GREEN
+  fi
+  printf '%s%s %s%%%s' "$c" "$1" "$pct" "$RESET"
 }
 
 segments=()
