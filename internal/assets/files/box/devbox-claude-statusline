@@ -4,7 +4,7 @@
 # is a symlink to this file. Reads the session JSON on stdin and prints one line.
 #
 #   acme-api ⎇ main* ↑1  client-a@acme-prod/europe-west2  adc ✓
-#   code 31%  Ctx 31%  5h 12%  7d 20%  $0.42 12m +80/-12  Fable 5.1
+#   8%  31% 12% 20%  $0.42 12m +80/-12  Fable 5.1
 #
 # Segments, each omitted when it does not apply, never an error:
 #   - directory and git state
@@ -12,9 +12,10 @@
 #     that `devbox project` gave the session
 #   - whether Application Default Credentials exist in that gcloud config,
 #     which is what devbox and most SDKs authenticate with
-#   - on the box: how full /srv/code is (the alert fires at disk_used_pct)
-#   - context window and rate-limit meters, session cost, wall time and lines
-#     changed, and the model
+#   - on the box: how full /srv/code is, unlabelled (the alert fires at
+#     disk_used_pct)
+#   - context window, 5-hour and 7-day rate-limit meters, unlabelled, in that
+#     order; session cost, wall time and lines changed; and the model
 # Needs jq.
 
 input=$(cat)
@@ -44,7 +45,8 @@ GREEN=$'\033[32m'
 YELLOW=$'\033[33m'
 CYAN=$'\033[36m'
 
-# meter LABEL PCT -> "LABEL NN%", green below 50, yellow below 80, red from 80.
+# meter LABEL PCT -> "LABEL NN%", or "NN%" for an empty LABEL; green below 50,
+# yellow below 80, red from 80.
 meter() {
   local pct c
   pct=$(awk -v p="$2" 'BEGIN{printf "%.0f", p+0}')
@@ -52,7 +54,7 @@ meter() {
   elif (( pct >= 50 )); then c=$YELLOW
   else c=$GREEN
   fi
-  printf '%s%s %s%%%s' "$c" "$1" "$pct" "$RESET"
+  printf '%s%s%s%%%s' "$c" "${1:+$1 }" "$pct" "$RESET"
 }
 
 segments=()
@@ -99,13 +101,15 @@ fi
 # Box: the pet disk. The email alert fires at disk_used_pct, 85 by default.
 if [ -d /srv/code ] && mountpoint -q /srv/code 2>/dev/null; then
   used=$(df -P /srv/code 2>/dev/null | awk 'NR==2 {sub(/%/, "", $5); print $5}')
-  [ -n "$used" ] && segments+=("$(meter code "$used")")
+  [ -n "$used" ] && segments+=("$(meter "" "$used")")
 fi
 
-# Usage meters.
-[ -n "$ctx_used" ] && segments+=("$(meter Ctx "$ctx_used")")
-[ -n "$five" ] && segments+=("$(meter 5h "$five")")
-[ -n "$week" ] && segments+=("$(meter 7d "$week")")
+# Usage meters: context, 5h, 7d. One segment so they sit a single space apart.
+usage=()
+[ -n "$ctx_used" ] && usage+=("$(meter "" "$ctx_used")")
+[ -n "$five" ] && usage+=("$(meter "" "$five")")
+[ -n "$week" ] && usage+=("$(meter "" "$week")")
+(( ${#usage[@]} )) && segments+=("${usage[*]}")
 
 # Session cost, wall time, lines changed.
 sess=""

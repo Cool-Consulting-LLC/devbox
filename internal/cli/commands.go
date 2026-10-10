@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"os/user"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -215,7 +216,13 @@ func (r *remoteFlags) target(ctx context.Context, b *box.Box) (remote.Target, er
 	t := remote.Target{Host: r.host, User: r.user, IAP: r.iap, Project: b.C.ProjectID, Zone: b.C.Zone, Instance: b.C.Name}
 	if t.Host == "" {
 		t.Host = b.C.Name
-		if !t.IAP && t.User == "" && onBox(b.C.Name) {
+		if !t.IAP && onBox(b.C.Name) {
+			// SSH from the box to itself fails either way: Tailscale SSH
+			// refuses it and the VPC sshd has no key for us.
+			me := currentUser()
+			if t.User != "" && t.User != me {
+				return t, fmt.Errorf("on the box as %s, --user %s cannot SSH to the box itself; run it as %s, or from the laptop", me, t.User, t.User)
+			}
 			t.Local = true
 			return t, nil
 		}
@@ -228,6 +235,13 @@ func (r *remoteFlags) target(ctx context.Context, b *box.Box) (remote.Target, er
 		t.User = u
 	}
 	return t, nil
+}
+
+func currentUser() string {
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return os.Getenv("USER")
 }
 
 // onBox reports whether this process runs on the box called name.
