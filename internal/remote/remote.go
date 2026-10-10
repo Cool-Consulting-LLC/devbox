@@ -1,5 +1,6 @@
 // Package remote runs commands on the box over SSH: Tailscale SSH by default,
-// or through IAP when the tailnet is the thing that broke.
+// or through IAP when the tailnet is the thing that broke. On the box itself it
+// skips SSH and runs the command directly.
 package remote
 
 import (
@@ -16,6 +17,9 @@ type Target struct {
 	Host string // tailnet hostname; defaults to the box name
 	User string // OS Login POSIX name
 	IAP  bool   // use `gcloud compute ssh --tunnel-through-iap`
+	// Local runs the command on this machine: we are on the box already, and
+	// Tailscale SSH does not take connections from a node to itself.
+	Local bool
 
 	Project, Zone, Instance string
 }
@@ -23,7 +27,9 @@ type Target struct {
 // Run executes cmd (a shell command line) on the box.
 func (t Target) Run(ctx context.Context, cmd string, stdin io.Reader) error {
 	var c *exec.Cmd
-	if t.IAP {
+	if t.Local {
+		c = exec.CommandContext(ctx, "sh", "-c", cmd)
+	} else if t.IAP {
 		args := []string{"compute", "ssh", t.Instance, "--project", t.Project, "--zone", t.Zone, "--tunnel-through-iap", "--command", cmd}
 		c = exec.CommandContext(ctx, "gcloud", args...)
 	} else {
@@ -45,7 +51,9 @@ func (t Target) Run(ctx context.Context, cmd string, stdin io.Reader) error {
 	}
 	if err := c.Run(); err != nil {
 		how := "ssh " + t.Host
-		if t.IAP {
+		if t.Local {
+			how = "on this box"
+		} else if t.IAP {
 			how = "gcloud compute ssh --tunnel-through-iap"
 		}
 		return fmt.Errorf("%s: %w", how, err)

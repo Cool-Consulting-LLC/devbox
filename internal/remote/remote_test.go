@@ -1,7 +1,10 @@
 package remote
 
 import (
+	"context"
+	"os"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -17,5 +20,16 @@ func TestJoinRoundTrips(t *testing.T) {
 	}
 	if string(out) != want {
 		t.Fatalf("got\n%s\nwant\n%s", out, want)
+	}
+}
+
+func TestLocalRunFeedsStdin(t *testing.T) {
+	f := t.TempDir() + "/out"
+	err := Target{Local: true}.Run(context.Background(), "cat > "+Quote(f), strings.NewReader("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(f); string(b) != "hello" {
+		t.Fatalf("got %q", b)
 	}
 }

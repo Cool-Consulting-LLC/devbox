@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -214,6 +215,10 @@ func (r *remoteFlags) target(ctx context.Context, b *box.Box) (remote.Target, er
 	t := remote.Target{Host: r.host, User: r.user, IAP: r.iap, Project: b.C.ProjectID, Zone: b.C.Zone, Instance: b.C.Name}
 	if t.Host == "" {
 		t.Host = b.C.Name
+		if !t.IAP && t.User == "" && onBox(b.C.Name) {
+			t.Local = true
+			return t, nil
+		}
 	}
 	if t.User == "" && !t.IAP {
 		u, err := b.PosixUser(ctx)
@@ -223,6 +228,16 @@ func (r *remoteFlags) target(ctx context.Context, b *box.Box) (remote.Target, er
 		t.User = u
 	}
 	return t, nil
+}
+
+// onBox reports whether this process runs on the box called name.
+func onBox(name string) bool {
+	h, err := os.Hostname()
+	if err != nil {
+		return false
+	}
+	short, _, _ := strings.Cut(h, ".")
+	return short == name
 }
 
 func reprovisionCmd(g *globals) *cobra.Command {
@@ -254,7 +269,9 @@ reprovision-tier key (see docs/config.md).`,
 				return err
 			}
 			via := t.Host
-			if t.IAP {
+			if t.Local {
+				via = "this machine"
+			} else if t.IAP {
 				via = "IAP"
 			}
 			fmt.Printf("reprovisioning %s via %s ...\n", b.C.Name, via)
