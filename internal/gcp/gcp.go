@@ -127,6 +127,18 @@ func Code(err error) int {
 	return 0
 }
 
+// NeedsLogin reports whether err means the laptop's credentials expired or were
+// revoked, e.g. by a Workspace reauthentication policy (invalid_rapt). It matches
+// on text because the token error reaches callers through several wrappers.
+func NeedsLogin(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "invalid_grant") || strings.Contains(s, "invalid_rapt") ||
+		strings.Contains(s, "reauth")
+}
+
 func IsNotFound(err error) bool { return Code(err) == http.StatusNotFound }
 func IsConflict(err error) bool { return Code(err) == http.StatusConflict }
 

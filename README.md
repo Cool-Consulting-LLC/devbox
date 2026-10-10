@@ -60,6 +60,8 @@ mosh slava@devbox -- tmux new -A -s main      # or: ssh slava@devbox
 
 If `ssh` hangs or `gcloud compute ssh` fails with `4003: 'failed to connect to backend'`, the box has suspended itself: run `./devbox up`.
 
+If `devbox` says your Google login expired, run `gcloud auth application-default login`. If that keeps happening, a Workspace admin can relax **Security → Access and data control → Google Cloud session control** at admin.google.com.
+
 To see what the idle check last counted, run `cat /run/devbox-idle.status` on the box.
 
 ### Projects and secrets
