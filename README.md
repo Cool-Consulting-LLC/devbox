@@ -70,12 +70,15 @@ From the laptop:
 
 ```bash
 ./devbox project add git@github.com:acme/api.git --gcloud-config client-a --gcp-project acme-prod --region europe-west2
+./devbox project set acme-api --gcloud-config client-b --recreate   # switch identity, restart the session
+./devbox project set acme-api --unset gcloud-config                 # back to /srv/code/.gcloud/default
 ./devbox project secret acme-api OPENAI_API_KEY             # prompts; input hidden
 pbpaste | ./devbox project secret acme-api DATABASE_URL     # or from stdin
 ./devbox project secret acme-api OPENAI_API_KEY --delete
 ```
 
-- **`project add`** clones into `/srv/code/acme-api/` and writes `.devbox-env`. It copies the non-secret variables into `.claude/settings.local.json`, for agents, and creates a tmux session named `acme-api`. Run it again to change the variables; `--env KEY=VALUE` adds any others.
+- **`project add`** clones into `/srv/code/acme-api/` and writes `.devbox-env`. It copies the non-secret variables into `.claude/settings.local.json`, for agents, and creates a tmux session named `acme-api`. `--env KEY=VALUE` adds any others.
+- **`project set`** changes an existing project's variables with the same flags, and removes them with `--unset KEY` (or `--unset gcloud-config|gcp-project|region`). The running session keeps the old values unless you pass `--recreate`, which restarts it and kills whatever is running in it. Restart Claude Code sessions in the project too.
 - **`project secret`** stores `devbox-acme-api-OPENAI_API_KEY` in Secret Manager and adds `OPENAI_API_KEY=@secret:devbox-acme-api-OPENAI_API_KEY` to `.devbox-env`. Running it again rotates the value and disables older versions.
 
 Sessions read secrets when they are created. After adding or rotating one, recreate the session on the box:

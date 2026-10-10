@@ -1,6 +1,7 @@
 #!/bin/bash
 # Box-side half of `devbox project`. Runs as the login user over SSH.
 #   devbox-project add <repo> <dir> [KEY=VALUE ...]
+#   devbox-project set <dir> [--recreate] [KEY=VALUE | -KEY ...]
 #   devbox-project secret-ref <dir> <KEY> <secret-id>
 #   devbox-project secret-unref <dir> <KEY>
 set -euo pipefail
@@ -17,14 +18,24 @@ upsert() {
   mv "$tmp" "$f"
 }
 
+# remove FILE KEY: drop KEY's line.
+remove() {
+  local f=$1 k=$2 tmp
+  tmp=$(mktemp "$f.XXXX")
+  grep -v "^$k=" "$f" > "$tmp" || true
+  mv "$tmp" "$f"
+}
+
 # The env block agents get. Never secrets: nothing resolves @secret: there.
+# settings DIR [REMOVED_KEY ...]: the merge keeps old keys, so removed ones are named.
 settings() {
-  local dir=$1 f=$1/.claude/settings.local.json
+  local dir=$1 f=$1/.claude/settings.local.json; shift
   mkdir -p "$dir/.claude"
   [ -f "$f" ] || echo '{}' > "$f"
   { grep -v -e '^#' -e '^$' -e '=@secret:' -e '^DEVBOX_' "$dir/.devbox-env" || true; } \
     | jq -R 'capture("^(?<k>[A-Za-z_][A-Za-z0-9_]*)=(?<v>.*)$")' \
-    | jq -s --slurpfile cur "$f" '$cur[0] * {env: (map({(.k): .v}) | add // {})}' > "$f.new"
+    | jq -s --slurpfile cur "$f" '$cur[0] * {env: (map({(.k): .v}) | add // {})}' \
+    | jq '.env |= (del(.[$ARGS.positional[]]))' --args "$@" > "$f.new"
   mv "$f.new" "$f"
 }
 
@@ -36,6 +47,25 @@ exclude() {
   done
 }
 
+# gcloud_check DIR: warn if the project's gcloud config has no login yet.
+gcloud_check() {
+  local cfg
+  cfg=$(sed -n 's/^CLOUDSDK_CONFIG=//p' "$1/.devbox-env" | tail -n1)
+  [ -n "$cfg" ] || return 0
+  mkdir -p "$cfg"
+  local missing=()
+  # Not `gcloud auth list`: on the box it falls back to the VM's service account.
+  compgen -G "$cfg/legacy_credentials/*" >/dev/null \
+    || missing+=("gcloud auth login --no-launch-browser")
+  [ -f "$cfg/application_default_credentials.json" ] \
+    || missing+=("gcloud auth application-default login --no-launch-browser")
+  [ ${#missing[@]} -gt 0 ] || return 0
+  echo "devbox-project: $cfg is not logged in yet. On the box, run:" >&2
+  echo "  export CLOUDSDK_CONFIG=$cfg" >&2
+  printf '  %s\n' "${missing[@]}" >&2
+  echo "then: devbox-sessions --recreate $(basename "$1" | tr . _)" >&2
+}
+
 case ${1:-} in
   add)
     repo=${2:?repo} name=${3:?dir}; shift 3
@@ -44,7 +74,7 @@ case ${1:-} in
     if [ -d "$dir/.git" ]; then echo "$dir already cloned"; else git clone "$repo" "$dir"; fi
     touch "$dir/.devbox-env"; chmod 600 "$dir/.devbox-env"
     for kv in "$@"; do upsert "$dir/.devbox-env" "${kv%%=*}" "${kv#*=}"; done
-    settings "$dir"; exclude "$dir"
+    settings "$dir"; exclude "$dir"; gcloud_check "$dir"
     QUIET=1 devbox-sessions
     echo "$dir ready; tmux session: ${name//./_}"
     ;;
@@ -55,13 +85,40 @@ case ${1:-} in
     echo "$dir/.devbox-env: $key=@secret:$id"
     echo "running sessions keep the old value until: devbox-sessions --recreate ${2//./_}"
     ;;
+  set)
+    name=${2:?dir}; shift 2
+    dir=/srv/code/$name s=${name//./_}
+    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad directory name $name"
+    [ -f "$dir/.devbox-env" ] || die "$dir is not a project; run devbox project add first"
+    recreate=0 removed=()
+    if [ "${1:-}" = --recreate ]; then recreate=1; shift; fi
+    # Check everything before writing anything.
+    for a in "$@"; do
+      [[ $a == -* ]] || continue
+      grep -q "^${a#-}=@secret:" "$dir/.devbox-env" \
+        && die "${a#-} is a secret; use: devbox project secret $name ${a#-} --delete"
+    done
+    for a in "$@"; do
+      case $a in
+        -*) remove "$dir/.devbox-env" "${a#-}"; removed+=("${a#-}"); echo "unset ${a#-}" ;;
+        *) upsert "$dir/.devbox-env" "${a%%=*}" "${a#*=}"; echo "set $a" ;;
+      esac
+    done
+    settings "$dir" "${removed[@]}"; gcloud_check "$dir"
+    if [ "$recreate" = 1 ]; then
+      devbox-sessions --recreate "$s"
+    elif tmux has-session -t "=$s" 2>/dev/null; then
+      echo "the running session keeps the old values until: devbox project set $name --recreate"
+    else
+      QUIET=1 devbox-sessions
+    fi
+    echo "restart Claude Code sessions in $dir to pick up the change"
+    ;;
   secret-unref)
     dir=/srv/code/${2:?dir} key=${3:?key}
     [ -f "$dir/.devbox-env" ] || die "$dir/.devbox-env does not exist"
-    tmp=$(mktemp "$dir/.devbox-env.XXXX")
-    grep -v "^$key=" "$dir/.devbox-env" > "$tmp" || true
-    mv "$tmp" "$dir/.devbox-env"
+    remove "$dir/.devbox-env" "$key"
     echo "$dir/.devbox-env: removed $key"
     ;;
-  *) die "usage: devbox-project add|secret-ref|secret-unref ..." ;;
+  *) die "usage: devbox-project add|set|secret-ref|secret-unref ..." ;;
 esac

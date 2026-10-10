@@ -31,6 +31,7 @@ var boxFiles = []boxFile{
 	{"box/devbox-secret", "/usr/local/bin/devbox-secret", "0755"},
 	{"box/devbox-sessions", "/usr/local/bin/devbox-sessions", "0755"},
 	{"box/devbox-project", "/usr/local/bin/devbox-project", "0755"},
+	{"box/devbox-tmux-colour", "/usr/local/bin/devbox-tmux-colour", "0755"},
 	{"box/devbox-agent-relay", "/usr/local/sbin/devbox-agent-relay", "0755"},
 	{"box/devbox-enroll", "/usr/local/sbin/devbox-enroll", "0755"},
 	{"box/mosh-server", "/usr/local/bin/mosh-server", "0755"},

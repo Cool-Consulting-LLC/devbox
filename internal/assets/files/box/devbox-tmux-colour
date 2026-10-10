@@ -1,0 +1,32 @@
+#!/bin/bash
+# devbox-tmux-colour [SESSION ...]: give each tmux session its own status bar colour.
+# The pick hashes the name, so a session keeps its colour across restarts, then steps
+# to the next colour another session isn't using. No arguments: every uncoloured session.
+# Run by the session-created hook in /etc/tmux.conf.
+set -uo pipefail
+# dark (bar background) : bright (session name and current tab)
+pairs=(24:75 22:114 94:214 54:141 23:44 88:210 58:184 90:213)
+# Sessions created back to back run this concurrently; one at a time, or they pick alike.
+sock=${TMUX%%,*}
+exec 9>"${sock:-/tmp/devbox-tmux-$(id -u)}.colour-lock"
+flock 9
+
+colour() {
+  local s=$1 used h i p
+  used=$(tmux list-sessions -F '#{session_name}	#{@accent}' | awk -F'\t' -v s="$s" '$1 != s {print $2}')
+  h=$(printf %s "$s" | cksum | cut -d' ' -f1)
+  for ((i = 0; i < ${#pairs[@]}; i++)); do
+    p=${pairs[(h + i) % ${#pairs[@]}]}
+    grep -qx "colour${p#*:}" <<<"$used" || break
+  done
+  tmux set -t "=$s:" status-style "bg=colour${p%:*},fg=colour252" \; \
+       set -t "=$s:" @accent "colour${p#*:}"
+}
+
+if [ $# -gt 0 ]; then
+  for s in "$@"; do colour "$s"; done
+else
+  tmux list-sessions -F '#{session_name}	#{@accent}' | while IFS=$'\t' read -r s a; do
+    [ -n "$a" ] || colour "$s"
+  done
+fi
