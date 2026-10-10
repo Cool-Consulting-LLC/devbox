@@ -27,6 +27,7 @@ A Claude Code workstation in your own GCP project, reachable over your tailnet, 
 **Claude Code**
 - Installed from Anthropic's signed apt repository.
 - Managed settings and a hook deny agents `git commit`, `git push`, `terraform apply/destroy` and `devbox apply/destroy`. This is policy, not a security boundary; branch protection on GitHub is the real backstop.
+- A status line in every session: directory and branch, the gcloud identity and project the session was given, whether that identity has Application Default Credentials, how full `/srv/code` is, context and rate-limit meters, session cost, and the model.
 
 **Projects**
 - Each project is a clone under `/srv/code` with its own environment file and tmux session.
@@ -148,7 +149,7 @@ Stop serving with `tailscale serve --https=443 off`.
 | Anything under `/srv/code`, your dotfiles | edit on the box | none |
 | `provision.sh`, files under `internal/assets/files/box/`, or a reprovision-tier key | `make build && ./devbox reprovision` | about 5 s, nothing lost |
 | `machine_type` | `./devbox apply` | restart; sessions lost |
-| `cloud-init.yaml` (packages, systemd units, sshd, managed settings), network or subnet | `./devbox apply` | replacement; sessions and home directories lost |
+| `cloud-init.yaml` (packages, systemd units, sshd), network or subnet | `./devbox apply` | replacement; sessions and home directories lost |
 
 - Run `./devbox apply --dry-run` first; it prints the plan and changes nothing.
 - `apply` asks before a restart or a replacement, and always resumes a suspended box before changing it.
@@ -302,6 +303,8 @@ On the box, run `claude` and log in with your subscription:
 2. If the browser shows a code, paste it at the `Paste code here` prompt.
 
 The login is stored on `/srv/code`, so replacements keep it. Claude Code warns three days before the login expires; renew it then.
+
+Managed settings, the guard hook and the status line script live under `internal/assets/files/box/` and are written by `reprovision`, so changing Claude Code policy never replaces the box. In a project session it shows the gcloud config, project and region from `.devbox-env`, and `no ADC` in red until that config has run `gcloud auth application-default login`.
 
 ### 10. Finder share (optional)
 

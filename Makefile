@@ -13,7 +13,7 @@ PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
 # `make lint` names the file and line rather than a test. No -s: each file
 # declares its shell, and profile.sh is POSIX sh, not bash.
 SCRIPTS := $(sort $(wildcard $(GITROOT)/internal/assets/files/*.sh) \
-             $(addprefix $(GITROOT)/internal/assets/files/box/,devbox-secret devbox-sessions devbox-project devbox-enroll idle-check.sh mosh-server profile.sh skel/.bashrc))
+             $(addprefix $(GITROOT)/internal/assets/files/box/,devbox-secret devbox-sessions devbox-project devbox-enroll devbox-claude-statusline guard.sh idle-check.sh mosh-server profile.sh skel/.bashrc))
 
 # Where the originals of the ported dotfiles live: your laptop's home.
 DOTFILES ?= $(HOME)

@@ -34,17 +34,17 @@ func TestCloudInitIsValidYAML(t *testing.T) {
 	}
 	// Embedded files must round-trip byte for byte through the YAML block scalars.
 	for path, src := range map[string]string{
-		"/etc/claude-code/managed-settings.json": "managed-settings.json",
-		"/etc/claude-code/hooks/guard.sh":        "guard.sh",
-		"/usr/local/sbin/devbox-bootstrap":       "bootstrap.sh",
+		"/usr/local/sbin/devbox-bootstrap": "bootstrap.sh",
 	} {
 		if byPath[path] != read(src) {
 			t.Errorf("%s does not round-trip through cloud-init", path)
 		}
 	}
-	var ms map[string]any
-	if err := json.Unmarshal([]byte(byPath["/etc/claude-code/managed-settings.json"]), &ms); err != nil {
-		t.Errorf("managed-settings.json: %v", err)
+	// Claude Code policy is reprovision tier; it must not have crept back.
+	for path := range byPath {
+		if strings.HasPrefix(path, "/etc/claude-code/") {
+			t.Errorf("%s belongs in boxFiles, not cloud-init", path)
+		}
 	}
 	if len(ci) > 200*1024 {
 		t.Errorf("user-data is %d bytes; metadata values are capped at 256 KB", len(ci))
@@ -53,7 +53,7 @@ func TestCloudInitIsValidYAML(t *testing.T) {
 
 func TestShellScriptsParse(t *testing.T) {
 	dir := t.TempDir()
-	scripts := map[string]string{"provision.sh": Provision(), "bootstrap.sh": read("bootstrap.sh"), "guard.sh": read("guard.sh")}
+	scripts := map[string]string{"provision.sh": Provision(), "bootstrap.sh": read("bootstrap.sh")}
 	for _, f := range boxFiles {
 		if strings.HasSuffix(f.mode, "755") && strings.HasPrefix(read(f.src), "#!/bin/bash") {
 			scripts[filepath.Base(f.dst)] = read(f.src)
@@ -98,6 +98,41 @@ func TestPythonCompiles(t *testing.T) {
 	}
 }
 
+func TestManagedSettings(t *testing.T) {
+	var ms struct {
+		StatusLine struct{ Command string } `json:"statusLine"`
+		Hooks      map[string][]struct {
+			Hooks []struct{ Command string }
+		}
+	}
+	if err := json.Unmarshal([]byte(read("box/managed-settings.json")), &ms); err != nil {
+		t.Fatal(err)
+	}
+	// Every path the settings name must be a file provision.sh writes.
+	dsts := map[string]bool{}
+	for _, f := range boxFiles {
+		dsts[f.dst] = true
+	}
+	want := []string{ms.StatusLine.Command}
+	for _, hs := range ms.Hooks {
+		for _, h := range hs {
+			for _, c := range h.Hooks {
+				want = append(want, c.Command)
+			}
+		}
+	}
+	for _, p := range want {
+		if !dsts[p] {
+			t.Errorf("managed-settings.json names %s, which no boxFile writes", p)
+		}
+	}
+	// Reprovision rewrites it through a quoted heredoc; the JSON must survive.
+	prov := Provision()
+	if !strings.Contains(prov, read("box/managed-settings.json")) {
+		t.Error("managed-settings.json is not carried verbatim by provision.sh")
+	}
+}
+
 func TestGuardHook(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "guard.sh")
 	if err := os.WriteFile(p, []byte(GuardHook()), 0o755); err != nil {
@@ -136,6 +171,60 @@ func TestGuardHook(t *testing.T) {
 		if run(c) {
 			t.Errorf("wrongly denied: %s", c)
 		}
+	}
+}
+
+func TestStatusLine(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not installed")
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "devbox-claude-statusline")
+	if err := os.WriteFile(p, []byte(read("box/devbox-claude-statusline")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gc := filepath.Join(dir, "gcloud")
+	if err := os.MkdirAll(filepath.Join(gc, "configurations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(stdin string, env ...string) string {
+		c := exec.Command(p)
+		c.Stdin = strings.NewReader(stdin)
+		c.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "CLOUDSDK_CONFIG=" + gc}, env...)
+		out, err := c.Output()
+		if err != nil {
+			t.Fatalf("%q: %v", stdin, err)
+		}
+		return string(out)
+	}
+	// Nothing known: still a line, never an error.
+	if out := run("{}"); !strings.Contains(out, "no ADC") || !strings.Contains(out, "gcloud") {
+		t.Errorf("empty input: %q", out)
+	}
+	// A project session with ADC: identity, meters, model.
+	for _, f := range []string{"application_default_credentials.json", "active_config", "configurations/config_default"} {
+		body := "{}"
+		if f == "active_config" {
+			body = "default"
+		}
+		if f == "configurations/config_default" {
+			body = "[core]\naccount = me@example.com\n"
+		}
+		if err := os.WriteFile(filepath.Join(gc, f), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := `{"model":{"display_name":"Opus"},"workspace":{"current_dir":"` + dir + `","project_dir":"` + dir + `"},` +
+		`"context_window":{"used_percentage":31.4},"rate_limits":{"five_hour":{"used_percentage":12}},` +
+		`"cost":{"total_cost_usd":0.42,"total_duration_ms":4521000,"total_lines_added":8,"total_lines_removed":1}}`
+	out := run(in, "CLOUDSDK_CORE_PROJECT=acme-prod", "CLOUDSDK_COMPUTE_REGION=europe-west2")
+	for _, want := range []string{"gcloud@acme-prod/europe-west2", "me@example.com", "Ctx [", "31%", "5h [", "$0.42 1h15m +8/-1", "Opus"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in %q", want, out)
+		}
+	}
+	if strings.Contains(out, "no ADC") || strings.Contains(out, "7d [") {
+		t.Errorf("unexpected segment in %q", out)
 	}
 }
 

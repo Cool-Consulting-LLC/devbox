@@ -27,11 +27,17 @@ func read(name string) string {
 type boxFile struct{ src, dst, mode string }
 
 // BoxFiles are reprovision tier: edit them, run `devbox reprovision`.
+// Claude Code policy is here rather than in cloud-init so that changing it
+// never replaces the instance. write_files runs before claude-code is
+// installed, so no session ever starts without it.
 var boxFiles = []boxFile{
+	{"box/managed-settings.json", "/etc/claude-code/managed-settings.json", "0644"},
+	{"box/guard.sh", "/etc/claude-code/hooks/guard.sh", "0755"},
 	{"box/devbox-secret", "/usr/local/bin/devbox-secret", "0755"},
 	{"box/devbox-sessions", "/usr/local/bin/devbox-sessions", "0755"},
 	{"box/devbox-project", "/usr/local/bin/devbox-project", "0755"},
 	{"box/devbox-tmux-colour", "/usr/local/bin/devbox-tmux-colour", "0755"},
+	{"box/devbox-claude-statusline", "/usr/local/bin/devbox-claude-statusline", "0755"},
 	{"box/devbox-agent-relay", "/usr/local/sbin/devbox-agent-relay", "0755"},
 	{"box/devbox-enroll", "/usr/local/sbin/devbox-enroll", "0755"},
 	{"box/mosh-server", "/usr/local/bin/mosh-server", "0755"},
@@ -83,9 +89,7 @@ func CloudInit() string {
 	}).Parse(read("cloud-init.yaml")))
 	var b bytes.Buffer
 	if err := t.Execute(&b, map[string]string{
-		"ManagedSettings": read("managed-settings.json"),
-		"GuardHook":       read("guard.sh"),
-		"Bootstrap":       read("bootstrap.sh"),
+		"Bootstrap": read("bootstrap.sh"),
 	}); err != nil {
 		panic(err)
 	}
@@ -119,4 +123,4 @@ func ConfigEnv(c *config.Config) string {
 }
 
 // GuardHook is exposed for tests.
-func GuardHook() string { return read("guard.sh") }
+func GuardHook() string { return read("box/guard.sh") }

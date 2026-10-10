@@ -11,6 +11,11 @@
     "disableBypassPermissionsMode": "disable"
   },
   "allowManagedPermissionRulesOnly": true,
+  "statusLine": {
+    "type": "command",
+    "command": "/usr/local/bin/devbox-claude-statusline",
+    "refreshInterval": 60
+  },
   "hooks": {
     "PreToolUse": [
       {
