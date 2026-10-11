@@ -7,7 +7,7 @@
 #   8%  31% 12% 20%  $0.42 12m +80/-12  Fable 5.1
 #
 # Segments, each omitted when it does not apply, never an error:
-#   - directory and git state
+#   - directory (project name cut to its last 7 characters) and git state
 #   - in a project session on the box: the gcloud config, project and region
 #     that `devbox project` gave the session
 #   - whether Application Default Credentials exist in that gcloud config,
@@ -62,7 +62,9 @@ segments=()
 # Directory and git state. Project dir is the repo; cwd may be a subdirectory.
 dir=${cwd:-$PWD}
 root=${project_dir:-$dir}
-seg="${BOLD}$(basename "$root")${RESET}"
+name=$(basename "$root")
+(( ${#name} > 7 )) && name="...${name: -7}"
+seg="${BOLD}${name}${RESET}"
 if [ "$dir" != "$root" ]; then
   seg+="${DIM}/${dir#"$root"/}${RESET}"
 fi
