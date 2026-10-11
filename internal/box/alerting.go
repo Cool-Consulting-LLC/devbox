@@ -31,7 +31,7 @@ func (b *Box) alertSpecs(instanceID uint64) []alertSpec {
 	return []alertSpec{
 		{"cpu-high", "CPU high", "The box has been above the CPU threshold for 5 minutes. It is undersized for what you are doing.",
 			cpu, "COMPARISON_GT", float64(a.CPUHighPct) / 100, "300s"},
-		{"cpu-idle", "CPU idle (idle suspend failed)", "A running box has been idle for 6 hours. With idle suspend on, that means the idle timer is broken: check `systemctl status devbox-idle.timer` and `journalctl -t devbox-idle`.",
+		{"cpu-idle", "CPU idle for 6 hours without suspending", "A running box has been idle for 6 hours. With idle suspend on, either something kept the box busy or the idle timer is broken. On the box, `cat /run/devbox-idle.status` shows what the last check counted (keyboard input, Claude Code turns, non-interactive SSH); `systemctl status devbox-idle.timer` shows whether it runs.",
 			cpu, "COMPARISON_LT", float64(a.CPUIdlePct) / 100, "21600s"},
 		{"disk-full", "/srv/code filling up", "The code disk is above the threshold. Grow it with code_disk_gb and `devbox apply`, then `devbox reprovision`.",
 			disk, "COMPARISON_GT", float64(a.DiskUsedPct), "300s"},
@@ -71,7 +71,8 @@ func policyDiff(have, want *monitoring.AlertPolicy) bool {
 		return true
 	}
 	h, w := have.Conditions[0].ConditionThreshold, want.Conditions[0].ConditionThreshold
-	return h.Filter != w.Filter || h.Comparison != w.Comparison || h.ThresholdValue != w.ThresholdValue ||
+	return have.DisplayName != want.DisplayName || have.Documentation == nil || have.Documentation.Content != want.Documentation.Content ||
+		h.Filter != w.Filter || h.Comparison != w.Comparison || h.ThresholdValue != w.ThresholdValue ||
 		h.Duration != w.Duration || h.EvaluationMissingData != w.EvaluationMissingData ||
 		!slices.Equal(have.NotificationChannels, want.NotificationChannels) ||
 		!have.Enabled

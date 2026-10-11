@@ -23,7 +23,13 @@
         "hooks": [
           { "type": "command", "command": "/etc/claude-code/hooks/guard.sh" }
         ]
-      }
-    ]
+      },
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] }
+    ],
+    "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] } ],
+    "PostToolUse": [ { "matcher": "*", "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] } ],
+    "Notification": [ { "matcher": "permission_prompt", "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] } ],
+    "Stop": [ { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] } ],
+    "SessionEnd": [ { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] } ]
   }
 }

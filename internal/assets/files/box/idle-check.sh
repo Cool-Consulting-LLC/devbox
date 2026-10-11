@@ -1,6 +1,7 @@
 #!/bin/bash
 # Run by devbox-idle.timer every 5 minutes, as root. Suspends the box through the
-# Compute API after THRESHOLD idle minutes. A detached tmux session is not busy.
+# Compute API after THRESHOLD minutes with no keyboard input, no Claude Code turn
+# in progress and no non-interactive SSH session.
 THRESHOLD=${1:-60}
 now=$(date +%s)
 
@@ -13,29 +14,51 @@ if [ $(( now - last_check )) -gt 900 ]; then
   exit 0
 fi
 
-# This runs as root, so `tmux list-clients` alone would only see root's
-# server. Walk every user's socket instead.
-tmux_clients=0
-for sock in /tmp/tmux-*/default; do
-  [ -S "$sock" ] || continue
-  n=$(tmux -S "$sock" list-clients 2>/dev/null | wc -l)
-  tmux_clients=$(( tmux_clients + n ))
+# Being connected is not being busy: a laptop left awake with mosh open would keep
+# the box up all night. What counts is keyboard input on any terminal (the tty's
+# atime, as in `w`), which covers ssh, mosh and tmux alike.
+last_input=0
+for tty in /dev/pts/[0-9]*; do
+  [ -c "$tty" ] || continue
+  t=$(stat -c %X "$tty")
+  [ "$t" -gt "$last_input" ] && last_input=$t
 done
 
-# Established connections to port 22 cover sshd (IAP, break-glass) and the mosh
-# bootstrap. Tailscale SSH terminates inside tailscaled's netstack, where ss may
-# not see it, so also count its per-session `tailscaled be-child ssh` processes.
-ssh_conns=$(ss -Htn state established '( sport = :22 )' | wc -l)
-ts_ssh=$(pgrep -fc '^/usr/sbin/tailscaled be-child ssh' || true)
-mosh_conns=$(pgrep -c mosh-server || true)
-claude_procs=$(pgrep -c -x claude || true)
+# Claude Code sessions mid-turn, from the claude-activity.sh hook. A working
+# file only counts while its claude process lives, and for at most MAX_TURN
+# minutes since the last hook, in case a turn ends without a Stop.
+MAX_TURN=180
+claude_working=0
+claude_waiting=0
+for f in /run/devbox-claude/*; do
+  [ -f "$f" ] && [ ! -L "$f" ] || continue
+  read -r state pid < "$f" 2>/dev/null
+  if [[ ! $pid =~ ^[0-9]+$ ]] || [ "$(cat /proc/"$pid"/comm 2>/dev/null)" != claude ]; then
+    rm -f "$f"
+    continue
+  fi
+  [ $(( now - $(stat -c %Y "$f") )) -lt $(( MAX_TURN * 60 )) ] || continue
+  case "$state" in
+    working) claude_working=$(( claude_working + 1 )) ;;
+    waiting) claude_waiting=$(( claude_waiting + 1 )) ;;
+  esac
+done
 
-busy=$(( tmux_clients + ssh_conns + ts_ssh + mosh_conns + claude_procs ))
-# What the last check saw, for the next "why did it suspend?".
-echo "$(date -Is) tmux=$tmux_clients ssh=$ssh_conns ts_ssh=$ts_ssh mosh=$mosh_conns claude=$claude_procs busy=$busy" > /run/devbox-idle.status
+# Sessions without a terminal have no keyboard to watch: `devbox reprovision`,
+# scp, port forwards. They count while connected; they end when the laptop sleeps.
+ssh_notty=$(pgrep -fc '^sshd(-session)?: [^ ]+@notty' || true)
+ts_notty=$(pgrep -fc '^/usr/sbin/tailscaled be-child ssh .*--has-tty=false' || true)
+
+busy=$(( claude_working + ssh_notty + ts_notty ))
+input_min=$(( ( now - last_input ) / 60 ))
+# What the last check saw, for the next "why did (or didn't) it suspend?".
+echo "$(date -Is) input=${input_min}m claude_working=$claude_working claude_waiting=$claude_waiting ssh_notty=$ssh_notty ts_notty=$ts_notty busy=$busy" > /run/devbox-idle.status
 if [ "$busy" -gt 0 ]; then
   echo "$now" > /run/devbox-last-active
   exit 0
+fi
+if [ "$last_input" -gt "$(cat /run/devbox-last-active 2>/dev/null || echo 0)" ]; then
+  echo "$last_input" > /run/devbox-last-active
 fi
 
 last=$(cat /run/devbox-last-active 2>/dev/null || echo "$now")

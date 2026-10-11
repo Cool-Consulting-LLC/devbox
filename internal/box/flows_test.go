@@ -123,6 +123,22 @@ func TestUpFromNothing(t *testing.T) {
 	e.assertConverged()
 }
 
+// Rewording an alert reaches policies created before the change.
+func TestAlertWordingUpdates(t *testing.T) {
+	e := setup(t)
+	e.run(ModeUp)
+	for _, a := range e.f.alerts {
+		if a.UserLabels["devbox-alert"] == "cpu-idle" {
+			a.DisplayName = "devbox: CPU idle (idle suspend failed)"
+		}
+	}
+	p := e.run(ModeApply)
+	if got := actions(p); !slices.Equal(got, []string{"update alert policy cpu-idle"}) {
+		t.Fatalf("reworded alert: %v", got)
+	}
+	e.assertConverged()
+}
+
 func TestMissingSecretsWarn(t *testing.T) {
 	e := setup(t)
 	delete(e.f.secrets, "devbox-ssh-key")

@@ -188,6 +188,8 @@ systemctl disable --now motd-news.timer 2>/dev/null || true
 rm -f /run/motd.dynamic
 
 step idle-suspend
+# Where the claude-activity.sh hook tells the idle check which sessions are mid-turn.
+install -d -m 1777 /run/devbox-claude
 if [ "$DEVBOX_IDLE_ENABLED" = true ]; then
   systemctl enable --now devbox-idle.timer
 else

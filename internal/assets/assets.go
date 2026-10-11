@@ -33,6 +33,7 @@ type boxFile struct{ src, dst, mode string }
 var boxFiles = []boxFile{
 	{"box/managed-settings.json", "/etc/claude-code/managed-settings.json", "0644"},
 	{"box/guard.sh", "/etc/claude-code/hooks/guard.sh", "0755"},
+	{"box/claude-activity.sh", "/etc/claude-code/hooks/claude-activity.sh", "0755"},
 	{"box/devbox-secret", "/usr/local/bin/devbox-secret", "0755"},
 	{"box/devbox-sessions", "/usr/local/bin/devbox-sessions", "0755"},
 	{"box/devbox-project", "/usr/local/bin/devbox-project", "0755"},

@@ -26,9 +26,9 @@ What does each value in `devbox.yaml` do? One row per key. Absent keys take the 
 | `snapshots.retention_days` | integer | `14` | in-place | Days each snapshot is kept. Snapshots outlive the disk. |
 | `alerts.email` | string | *(empty)* | in-place | Address of the email notification channel. Empty disables all alerting resources. |
 | `alerts.cpu_high_pct` | integer | `80` | in-place | Alert when CPU stays above this percentage for 5 minutes. |
-| `alerts.cpu_idle_pct` | integer | `5` | in-place | Alert when a running box stays below this percentage for 6 hours, which means idle suspend has failed. |
+| `alerts.cpu_idle_pct` | integer | `5` | in-place | Alert when a running box stays below this percentage for 6 hours: something kept it from suspending, or the idle timer is broken. |
 | `alerts.disk_used_pct` | integer | `85` | in-place | Alert when /srv/code is fuller than this percentage. |
-| `idle_suspend.enabled` | bool | `true` | reprovision | Suspend the box after a period with no attached tmux clients, SSH or mosh connections or claude processes. |
+| `idle_suspend.enabled` | bool | `true` | reprovision | Suspend the box after a period with no keyboard input, no Claude Code turn in progress and no non-interactive SSH session. |
 | `idle_suspend.after_minutes` | integer | `60` | reprovision | Idle minutes before the box suspends itself. |
 | `break_glass.enabled` | bool | `false` | in-place | Create a firewall rule opening sshd to source_cidr, for when Tailscale and IAP are both unavailable. |
 | `break_glass.source_cidr` | string | *(empty)* | in-place | Your public address as /32 (IPv4) or /128 (IPv6). Required when enabled. 0.0.0.0/0 is refused. |

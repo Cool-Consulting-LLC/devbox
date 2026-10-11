@@ -10,8 +10,8 @@ A Claude Code workstation in your own GCP project, reachable over your tailnet, 
 - An Ubuntu 24.04 VM (`e2-standard-2` by default) on an existing VPC subnet.
 - Reached over Tailscale SSH or mosh. Two fallbacks: SSH through IAP, and an optional break-glass firewall rule for one address.
 - You log in with your Google account through OS Login. OS Login admins get sudo.
-- It suspends itself after 60 idle minutes: no attached tmux client, SSH session, mosh session or `claude` process. Suspend keeps memory, so tmux and Claude Code sessions survive. Resuming takes about 30 seconds.
-- Email alerts: CPU above 80% for 5 minutes, CPU below 5% for 6 hours (idle suspend has failed), `/srv/code` above 85%.
+- It suspends itself after 60 idle minutes: no keyboard input in any terminal, no Claude Code session mid-turn and no non-interactive SSH session (`devbox reprovision`, scp, port forwards). An open but untouched mosh or SSH window does not keep it up. Suspend keeps memory, so tmux and Claude Code sessions survive. Resuming takes about 30 seconds.
+- Email alerts: CPU above 80% for 5 minutes, CPU below 5% for 6 hours (something kept the box up, or the idle timer is broken), `/srv/code` above 85%.
 
 **`/srv/code`, the disk that survives**
 - A separate 50 GB disk, snapshotted daily at 03:00 UTC and kept 14 days.

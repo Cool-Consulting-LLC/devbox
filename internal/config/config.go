@@ -80,12 +80,12 @@ type Snapshots struct {
 type Alerts struct {
 	Email       string `yaml:"email" describe:"Address of the email notification channel. Empty disables all alerting resources." tier:"in-place"`
 	CPUHighPct  int    `yaml:"cpu_high_pct" describe:"Alert when CPU stays above this percentage for 5 minutes." tier:"in-place" default:"80"`
-	CPUIdlePct  int    `yaml:"cpu_idle_pct" describe:"Alert when a running box stays below this percentage for 6 hours, which means idle suspend has failed." tier:"in-place" default:"5"`
+	CPUIdlePct  int    `yaml:"cpu_idle_pct" describe:"Alert when a running box stays below this percentage for 6 hours: something kept it from suspending, or the idle timer is broken." tier:"in-place" default:"5"`
 	DiskUsedPct int    `yaml:"disk_used_pct" describe:"Alert when /srv/code is fuller than this percentage." tier:"in-place" default:"85"`
 }
 
 type IdleSuspend struct {
-	Enabled      *bool `yaml:"enabled" describe:"Suspend the box after a period with no attached tmux clients, SSH or mosh connections or claude processes." tier:"reprovision" default:"true"`
+	Enabled      *bool `yaml:"enabled" describe:"Suspend the box after a period with no keyboard input, no Claude Code turn in progress and no non-interactive SSH session." tier:"reprovision" default:"true"`
 	AfterMinutes int   `yaml:"after_minutes" describe:"Idle minutes before the box suspends itself." tier:"reprovision" default:"60"`
 }
 

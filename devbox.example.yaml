@@ -34,7 +34,7 @@ snapshots:
 alerts:
   email: slava@coolconsulting.lol
   cpu_high_pct: 80               # sustained 5m
-  cpu_idle_pct: 5                # sustained 6h: idle suspend has failed
+  cpu_idle_pct: 5                # sustained 6h: something kept the box up
   disk_used_pct: 85
 
 idle_suspend:
