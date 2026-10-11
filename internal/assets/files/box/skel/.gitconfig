@@ -1,0 +1,72 @@
+# ~/.gitconfig on the devbox, from /etc/skel. Ported from the laptop's ~/.gitconfig.
+# `make diff-dotfiles` shows drift against the original. Left out on purpose:
+# [user] and [gpg], since /etc/gitconfig signs with the box's SSH key and anything
+# here would override it; core.fsmonitor, which has no Linux backend.
+[push]
+    default = matching
+    autoSetupRemote = true
+    followTags = true
+[tag]
+    forceSignAnnotated = true
+    sort = version:refname
+[alias]
+    git = !exec git
+    c = checkout
+    o = commit
+    p = pull
+    u = push
+    r = push --rebase
+    d = difftool
+[apply]
+    whitespace = nowarn
+[color]
+    branch = auto
+    diff = auto
+    status = auto
+[color "branch"]
+    current = yellow reverse
+    local = yellow
+    remote = green
+[color "diff"]
+    meta = yellow bold
+    frag = magenta bold
+    old = red bold
+    new = green bold
+[color "status"]
+    added = yellow
+    changed = green
+    untracked = cyan
+[commit]
+    gpgsign = true
+    verbose = true
+[http]
+    postBuffer = 524288000
+[core]
+    autocrlf = input
+    untrackedCache = true
+[difftool]
+    prompt = false
+[url "git@github.com:"]
+    insteadOf = https://github.com/
+[column]
+    ui = auto
+[branch]
+    sort = -committerdate
+[diff]
+    algorithm = histogram
+    colorMoved = plain
+    mnemonicPrefix = true
+    renames = true
+[fetch]
+    prune = true
+    pruneTags = true
+    all = true
+[help]
+    autocorrect = prompt
+[rerere]
+    enabled = true
+    autoupdate = true
+[pull]
+    rebase = true
+[init]
+    defaultBranch = main

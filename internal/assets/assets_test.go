@@ -245,7 +245,7 @@ func TestMakeLintCoversBoxScripts(t *testing.T) {
 		case ".json", ".conf":
 			continue
 		}
-		if strings.HasSuffix(f.src, "/.ssh/config") {
+		if strings.HasSuffix(f.src, "/.ssh/config") || strings.HasSuffix(f.src, "/.gitconfig") {
 			continue
 		}
 		if !strings.Contains(string(mk), strings.TrimPrefix(f.src, "box/")) {

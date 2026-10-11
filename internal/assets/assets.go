@@ -47,6 +47,7 @@ var boxFiles = []boxFile{
 	{"box/profile.sh", "/etc/profile.d/devbox.sh", "0644"},
 	{"box/tmux.conf", "/etc/tmux.conf", "0644"},
 	{"box/skel/.bashrc", "/etc/skel/.bashrc", "0644"},
+	{"box/skel/.gitconfig", "/etc/skel/.gitconfig", "0644"},
 	{"box/skel/.ssh/config", "/etc/skel/.ssh/config", "0600"},
 }
 

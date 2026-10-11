@@ -72,6 +72,7 @@ check: lint test docs-check ## Lint + test + docs
 diff-dotfiles: ## Diff the box's dotfiles against the originals in $(DOTFILES)
 	-diff -u $(DOTFILES)/.bashrc $(SKEL)/.bashrc
 	-diff -u $(DOTFILES)/.ssh/config $(SKEL)/.ssh/config
+	-diff -u $(DOTFILES)/.gitconfig $(SKEL)/.gitconfig
 	-diff -u $(DOTFILES)/.tmux.conf $(GITROOT)/internal/assets/files/box/tmux.conf
 
 ##@ Build
