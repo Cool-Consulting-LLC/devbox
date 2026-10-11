@@ -37,6 +37,7 @@ var boxFiles = []boxFile{
 	{"box/devbox-secret", "/usr/local/bin/devbox-secret", "0755"},
 	{"box/devbox-sessions", "/usr/local/bin/devbox-sessions", "0755"},
 	{"box/devbox-project", "/usr/local/bin/devbox-project", "0755"},
+	{"box/devbox-gcloud-login", "/usr/local/bin/devbox-gcloud-login", "0755"},
 	{"box/devbox-tmux-colour", "/usr/local/bin/devbox-tmux-colour", "0755"},
 	{"box/devbox-claude-statusline", "/usr/local/bin/devbox-claude-statusline", "0755"},
 	{"box/devbox-agent-relay", "/usr/local/sbin/devbox-agent-relay", "0755"},

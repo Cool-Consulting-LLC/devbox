@@ -53,16 +53,15 @@ gcloud_check() {
   cfg=$(sed -n 's/^CLOUDSDK_CONFIG=//p' "$1/.devbox-env" | tail -n1)
   [ -n "$cfg" ] || return 0
   mkdir -p "$cfg"
-  local missing=()
   # Not `gcloud auth list`: on the box it falls back to the VM's service account.
   compgen -G "$cfg/legacy_credentials/*" >/dev/null \
-    || missing+=("gcloud auth login --no-launch-browser")
-  [ -f "$cfg/application_default_credentials.json" ] \
-    || missing+=("gcloud auth application-default login --no-launch-browser")
-  [ ${#missing[@]} -gt 0 ] || return 0
+    && [ -f "$cfg/application_default_credentials.json" ] && return 0
   echo "devbox-project: $cfg is not logged in yet. On the box, run:" >&2
-  echo "  export CLOUDSDK_CONFIG=$cfg" >&2
-  printf '  %s\n' "${missing[@]}" >&2
+  if [ "$(dirname "$cfg")" = /srv/code/.gcloud ]; then
+    echo "  devbox-gcloud-login $(basename "$cfg")" >&2
+  else
+    echo "  CLOUDSDK_CONFIG=$cfg devbox-gcloud-login" >&2
+  fi
   echo "then: devbox-sessions --recreate $(basename "$1" | tr . _)" >&2
 }
 

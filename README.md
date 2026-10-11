@@ -95,7 +95,7 @@ mosh you@devbox -- tmux new -A -s main        # or: ssh you@devbox
 
 If `ssh` hangs or `gcloud compute ssh` fails with `4003: 'failed to connect to backend'`, the box has suspended itself: run `./devbox up`.
 
-If `devbox` says your Google login expired, run `gcloud auth application-default login`. If that keeps happening, a Workspace admin can relax **Security → Access and data control → Google Cloud session control** at admin.google.com.
+If `devbox` says your Google login expired, run `make auth` (on the box, `devbox-gcloud-login`). If that keeps happening, a Workspace admin can relax **Security → Access and data control → Google Cloud session control** at admin.google.com.
 
 To see what the idle check last counted, run `cat /run/devbox-idle.status` on the box.
 
@@ -134,10 +134,10 @@ Where values live:
 `--gcloud-config client-a` points the project at `/srv/code/.gcloud/client-a`. Log that identity in once, on the box:
 
 ```bash
-export CLOUDSDK_CONFIG=/srv/code/.gcloud/client-a
-gcloud auth login --no-launch-browser
-gcloud auth application-default login --no-launch-browser
+devbox-gcloud-login client-a
 ```
+
+That is `gcloud auth login --no-launch-browser --update-adc`, so one browser round trip writes both the CLI login and Application Default Credentials. Run it again whenever the login expires. With no name it logs in `$CLOUDSDK_CONFIG`, which is the project's config inside a project session, or the default config outside one. Extra flags go to `gcloud auth login`, for example `--account=me@example.com`. Sessions pick up the new login without a restart.
 
 To remove a project, run `tmux kill-session -t acme-api && rm -rf /srv/code/acme-api` on the box, then delete its secrets with `--delete`.
 
@@ -343,7 +343,7 @@ On the box, run `claude` and log in with your subscription:
 
 The login is stored on `/srv/code`, so replacements keep it. Claude Code warns three days before the login expires; renew it then.
 
-Managed settings, the guard hook and the status line script live under `internal/assets/files/box/` and are written by `reprovision`, so changing Claude Code policy never replaces the box. In a project session it shows the gcloud config, project and region from `.devbox-env`, and `no ADC` in red until that config has run `gcloud auth application-default login`.
+Managed settings, the guard hook and the status line script live under `internal/assets/files/box/` and are written by `reprovision`, so changing Claude Code policy never replaces the box. In a project session it shows the gcloud config, project and region from `.devbox-env`, and `no ADC` in red until that config has run `devbox-gcloud-login`.
 
 ### 10. Finder share (optional)
 

@@ -15,7 +15,7 @@ PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
 # checked separately. assets_test.go fails if a box file is in neither list.
 BOX := $(GITROOT)/internal/assets/files/box
 SCRIPTS := $(sort $(wildcard $(GITROOT)/internal/assets/files/*.sh) \
-             $(addprefix $(BOX)/,claude-activity.sh devbox-claude-statusline devbox-enroll devbox-project devbox-secret devbox-sessions devbox-tmux-colour guard.sh idle-check.sh mosh-server profile.sh skel/.bashrc))
+             $(addprefix $(BOX)/,claude-activity.sh devbox-claude-statusline devbox-enroll devbox-gcloud-login devbox-project devbox-secret devbox-sessions devbox-tmux-colour guard.sh idle-check.sh mosh-server profile.sh skel/.bashrc))
 PYTHON := $(BOX)/devbox-agent-relay
 
 # Where the originals of the ported dotfiles live: your laptop's home.
@@ -96,6 +96,6 @@ clean: ## Remove ./devbox and dist/
 .PHONY: auth
 # The binary uses Application Default Credentials, not the gcloud CLI login,
 # so both are needed: the CLI for the README's gcloud commands, ADC for devbox.
+# --update-adc writes both from one browser round trip.
 auth: ## Log in to gcloud and create Application Default Credentials
-	gcloud auth login
-	gcloud auth application-default login
+	gcloud auth login --update-adc

@@ -1,0 +1,18 @@
+#!/bin/bash
+# devbox-gcloud-login [CONFIG] [GCLOUD FLAG ...]: log a gcloud config in again,
+# CLI login and Application Default Credentials in one browser round trip.
+#   no CONFIG: $CLOUDSDK_CONFIG (a project session's), else the default config
+#   CONFIG:    /srv/code/.gcloud/CONFIG, as in `devbox project --gcloud-config`
+# Flags go to `gcloud auth login`, e.g. --account=me@example.com.
+set -euo pipefail
+die() { echo "devbox-gcloud-login: $*" >&2; exit 1; }
+
+if [ $# -gt 0 ] && [[ $1 != -* ]]; then
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad config name $1"
+  export CLOUDSDK_CONFIG=/srv/code/.gcloud/$1
+  shift
+fi
+cfg=${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}
+mkdir -p "$cfg"
+echo "logging in $cfg"
+gcloud auth login --no-launch-browser --update-adc "$@"
