@@ -53,6 +53,7 @@ for m in /srv/code/.devbox/enrolled/*; do
   fi
   home=$(getent passwd "$uid" | cut -d: -f6) || true
   if [ -n "$home" ] && [ ! -d "$home" ]; then mkhomedir_helper "$user" 0077; fi
+  loginctl enable-linger "$user" || true   # see devbox-enroll: tmux must outlive sessions
 done
 if visudo -cqf "$sudoers"; then install -m 0440 "$sudoers" /etc/sudoers.d/devbox-admins; fi
 rm -f "$sudoers"

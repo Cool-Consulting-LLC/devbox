@@ -8,6 +8,11 @@ set -euo pipefail
 u=${SUDO_USER:?run through sudo}
 uid=${SUDO_UID:?run through sudo}
 [ "$uid" != 0 ] || exit 0
+# Linger keeps user@.service up with no login session. Without it, logind stops
+# the user manager when the last session closes, and tmux 3.4 runs its panes in
+# that manager's scopes, so every tmux pane dies with it. Before the marker check
+# so a re-run is harmless; provision.sh covers users enrolled before this existed.
+loginctl enable-linger "$u"
 # Keyed by uid: OS Login uids are stable, usernames can be renamed.
 mark=/srv/code/.devbox/enrolled/$uid
 [ -e "$mark" ] && exit 0
