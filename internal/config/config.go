@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,9 +26,6 @@ const (
 	TierRefused     = "refused"     // not implemented; setting it is an error
 )
 
-// SecretPrefix is the Secret Manager name prefix the box can read, for every box.
-const SecretPrefix = "devbox-"
-
 // Config is devbox.yaml. Struct tags drive both parsing and `devbox config --describe`.
 type Config struct {
 	ProjectID     string `yaml:"project_id" describe:"GCP project to build in. You need owner on it, or editor plus Project IAM Admin and Role Administrator. Exactly one of this or create_project." tier:"identity"`
@@ -37,7 +36,7 @@ type Config struct {
 
 	Network Network `yaml:"network"`
 
-	MachineType string `yaml:"machine_type" describe:"Compute machine type. Must be suspend-capable; E2 is the only family that reports guest memory without an agent." tier:"restart" default:"e2-standard-2"`
+	MachineType string `yaml:"machine_type" describe:"Compute machine type. Must be suspend-capable; E2 is the only family that reports guest memory without an agent." tier:"restart" default:"e2-standard-4"`
 	ExternalIP  *bool  `yaml:"external_ip" describe:"Give the instance an ephemeral external IP for egress. Set false only if the subnet has Cloud NAT and Private Google Access." tier:"in-place" default:"true"`
 	CodeDiskGB  int64  `yaml:"code_disk_gb" describe:"Size of the /srv/code pet disk. Grow only; shrinking is refused." tier:"reprovision" default:"50"`
 	BootDiskGB  int64  `yaml:"boot_disk_gb" describe:"Size of the boot disk. Grow only; shrinking is refused." tier:"reprovision" default:"30"`
@@ -54,8 +53,8 @@ type Config struct {
 }
 
 type Network struct {
-	Name   string `yaml:"name" describe:"An existing VPC network in the project. Never created or deleted." tier:"replace" default:"default"`
-	Subnet string `yaml:"subnet" describe:"An existing subnet of that network, in the zone's region." tier:"replace" default:"default"`
+	Name   string `yaml:"name" describe:"An existing VPC network in the project. Never created or deleted. Required: GCP's network called default usually allows SSH from anywhere, so prefer a dedicated one (README.md, How to set it up, step 2). preflight lists rules that would expose the box." tier:"replace"`
+	Subnet string `yaml:"subnet" describe:"An existing subnet of that network, in the zone's region. Required." tier:"replace"`
 }
 
 type Git struct {
@@ -65,11 +64,11 @@ type Git struct {
 
 type Tailscale struct {
 	Tag         string `yaml:"tag" describe:"ACL tag the node advertises. Must be owned by the OAuth client." tier:"reprovision" default:"tag:devbox"`
-	OAuthSecret string `yaml:"oauth_secret" describe:"Secret Manager secret holding the Tailscale OAuth client secret. Must start with devbox-." tier:"reprovision" default:"devbox-tailscale-oauth"`
+	OAuthSecret string `yaml:"oauth_secret" describe:"Secret Manager secret holding the Tailscale OAuth client secret. The box is granted read access on this secret only." tier:"reprovision" default:"devbox-tailscale-oauth"`
 }
 
 type SSHKey struct {
-	Secret string `yaml:"secret" describe:"Secret Manager secret holding the machine ed25519 private key, loaded into the system ssh-agent at boot. Must start with devbox-." tier:"reprovision" default:"devbox-ssh-key"`
+	Secret string `yaml:"secret" describe:"Secret Manager secret holding the machine ed25519 private key, loaded into the system ssh-agent at boot. The box is granted read access on this secret only." tier:"reprovision" default:"devbox-ssh-key"`
 }
 
 type Snapshots struct {
@@ -102,8 +101,7 @@ func Defaults() *Config {
 	return &Config{
 		Zone:        "europe-west4-a",
 		Name:        "devbox",
-		Network:     Network{Name: "default", Subnet: "default"},
-		MachineType: "e2-standard-2",
+		MachineType: "e2-standard-4",
 		ExternalIP:  boolPtr(true),
 		CodeDiskGB:  50,
 		BootDiskGB:  30,
@@ -197,12 +195,16 @@ func (c *Config) Validate() error {
 	if c.Git.Name == "" || c.Git.Email == "" || !strings.Contains(c.Git.Email, "@") {
 		bad("git.name and git.email are required")
 	}
+	if strings.ContainsAny(c.Git.Email, " \t") {
+		bad("git.email %q contains whitespace", c.Git.Email)
+	}
+	rejectControl(reflect.ValueOf(c).Elem(), "", bad)
 	if !tagRe.MatchString(c.Tailscale.Tag) {
 		bad("tailscale.tag %q must look like tag:devbox", c.Tailscale.Tag)
 	}
 	for k, v := range map[string]string{"tailscale.oauth_secret": c.Tailscale.OAuthSecret, "ssh_key.secret": c.SSHKey.Secret} {
-		if !strings.HasPrefix(v, SecretPrefix) || !secretIDRe.MatchString(v) {
-			bad("%s %q must be a secret ID starting with %q, or the box cannot read it", k, v, SecretPrefix)
+		if !secretIDRe.MatchString(v) {
+			bad("%s %q is not a Secret Manager secret ID", k, v)
 		}
 	}
 	if !hourRe.MatchString(c.Snapshots.StartTime) {
@@ -234,6 +236,35 @@ func (c *Config) Validate() error {
 		return errors.New(strings.Join(errs, "\n"))
 	}
 	return nil
+}
+
+// rejectControl reports every string field holding a control character. Values
+// end up in /etc/gitconfig, allowed_signers and shell-sourced metadata on the
+// box, where a newline starts a new directive that root then honours.
+func rejectControl(v reflect.Value, path string, bad func(string, ...any)) {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if !v.IsNil() {
+			rejectControl(v.Elem(), path, bad)
+		}
+	case reflect.Struct:
+		t := v.Type()
+		for i := range t.NumField() {
+			name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+			if path != "" {
+				name = path + "." + name
+			}
+			rejectControl(v.Field(i), name, bad)
+		}
+	case reflect.Slice:
+		for i := range v.Len() {
+			rejectControl(v.Index(i), fmt.Sprintf("%s[%d]", path, i), bad)
+		}
+	case reflect.String:
+		if strings.ContainsFunc(v.String(), unicode.IsControl) {
+			bad("%s contains a control character, such as a newline", path)
+		}
+	}
 }
 
 func checkCIDR(s string) error {

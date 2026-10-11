@@ -2,6 +2,7 @@ package box
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	crm "google.golang.org/api/cloudresourcemanager/v1"
@@ -32,10 +33,10 @@ func (b *Box) PlanDestroy(ctx context.Context, all bool) (*Plan, error) {
 	}
 
 	in, err := b.GetInstance(ctx)
-	if err != nil {
+	if err != nil && !p.skipForeign(err) {
 		return nil, err
 	}
-	if in != nil {
+	if in != nil && err == nil {
 		p.add(Op{Resource: "instance " + b.C.Name, Action: "delete", Detail: "boot disk with it; the code disk is detached, not deleted", Run: func(ctx context.Context) error {
 			return b.G.Await(ctx)(b.G.Compute.Instances.Delete(b.C.ProjectID, b.C.Zone, b.C.Name).Context(ctx).Do())
 		}})
@@ -43,11 +44,17 @@ func (b *Box) PlanDestroy(ctx context.Context, all bool) (*Plan, error) {
 
 	disk, err := b.getCodeDisk(ctx)
 	if err != nil {
-		return nil, err
+		if !p.skipForeign(err) {
+			return nil, err
+		}
+		disk = nil
 	}
 	rp, err := b.getSnapshotPolicy(ctx)
 	if err != nil {
-		return nil, err
+		if !p.skipForeign(err) {
+			return nil, err
+		}
+		rp = nil
 	}
 	if all && disk != nil {
 		p.add(Op{Resource: "disk " + disk.Name, Action: "delete", Detail: fmt.Sprintf("%d GB, everything in /srv/code", disk.SizeGb), Run: func(ctx context.Context) error {
@@ -78,11 +85,12 @@ func (b *Box) PlanDestroy(ctx context.Context, all bool) (*Plan, error) {
 	}
 
 	for _, name := range []string{b.C.FirewallIAPName(), b.C.FirewallGlassName()} {
-		_, err := b.G.Compute.Firewalls.Get(b.C.ProjectID, name).Context(ctx).Do()
-		if gcp.IsNotFound(err) {
-			continue
-		} else if err != nil {
+		fw, err := b.getFirewall(ctx, name)
+		if err != nil && !p.skipForeign(err) {
 			return nil, err
+		}
+		if fw == nil || err != nil {
+			continue
 		}
 		p.add(Op{Resource: "firewall " + name, Action: "delete", Run: func(ctx context.Context) error {
 			return b.G.Await(ctx)(b.G.Compute.Firewalls.Delete(b.C.ProjectID, name).Context(ctx).Do())
@@ -101,10 +109,10 @@ func (b *Box) PlanDestroy(ctx context.Context, all bool) (*Plan, error) {
 	}
 
 	sa, err := b.getSA(ctx)
-	if err != nil {
+	if err != nil && !p.skipForeign(err) {
 		return nil, err
 	}
-	if sa != nil {
+	if sa != nil && err == nil {
 		p.add(Op{Resource: "service account " + b.C.Name, Action: "delete", Run: func(ctx context.Context) error {
 			_, err := b.G.IAM.Projects.ServiceAccounts.Delete(b.saName()).Context(ctx).Do()
 			if gcp.IsNotFound(err) {
@@ -138,6 +146,16 @@ func (b *Box) PlanDestroy(ctx context.Context, all bool) (*Plan, error) {
 		}})
 	}
 	return p, nil
+}
+
+// skipForeign turns ErrNotOurs into a warning, so destroy removes what is this
+// box's and leaves the rest. Any other error is the caller's.
+func (p *Plan) skipForeign(err error) bool {
+	if !errors.Is(err, ErrNotOurs) {
+		return false
+	}
+	p.warn("kept: %v", err)
+	return true
 }
 
 // ListSnapshots returns the code disk's snapshots, which carry the box label.

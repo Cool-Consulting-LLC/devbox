@@ -4,10 +4,10 @@ package box
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 
 	"github.com/Cool-Consulting-LLC/devbox/internal/config"
 	"github.com/Cool-Consulting-LLC/devbox/internal/gcp"
@@ -17,10 +17,6 @@ type Box struct {
 	C   *config.Config
 	G   *gcp.Clients
 	Out io.Writer
-
-	numOnce sync.Once
-	num     string
-	numErr  error
 }
 
 func New(c *config.Config, g *gcp.Clients, out io.Writer) *Box {
@@ -106,6 +102,7 @@ func (b *Box) Reconcile(ctx context.Context, mode Mode) (*Plan, error) {
 		b.planServiceAccount,
 		b.planSuspendRole,
 		b.planProjectIAM,
+		b.planSecretIAM,
 		b.planFirewalls,
 		b.planCodeDisk,
 		b.planSnapshots,
@@ -133,17 +130,25 @@ func (b *Box) Reconcile(ctx context.Context, mode Mode) (*Plan, error) {
 	return p, nil
 }
 
-// ProjectNumber is needed for Secret Manager IAM conditions, which match on it.
-func (b *Box) ProjectNumber(ctx context.Context) (string, error) {
-	b.numOnce.Do(func() {
-		pr, err := b.G.CRM.Projects.Get(b.C.ProjectID).Context(ctx).Do()
-		if err != nil {
-			b.numErr = err
-			return
-		}
-		b.num = fmt.Sprint(pr.ProjectNumber)
-	})
-	return b.num, b.numErr
+func (b *Box) logf(f string, a ...any) { fmt.Fprintf(b.Out, "      "+f+"\n", a...) }
+
+// ErrNotOurs marks a resource found by name that this binary did not create for
+// this box. Names are predictable (devbox, devbox-code, ...), so a name match
+// alone could be someone else's VM or disk; nothing is changed or deleted
+// without the mark the binary leaves: the devbox=<name> label where the
+// resource takes labels, its own description where it does not.
+var ErrNotOurs = errors.New("not created by devbox for this box")
+
+func (b *Box) notOurs(kind, name, fix string) error {
+	return fmt.Errorf("%s %s exists but is %w (%s); refusing to change or delete it. Choose another `name`, or %s",
+		kind, name, ErrNotOurs, b.C.Name, fix)
 }
 
-func (b *Box) logf(f string, a ...any) { fmt.Fprintf(b.Out, "      "+f+"\n", a...) }
+func (b *Box) ownsLabels(l map[string]string) bool { return l[config.LabelKey] == b.C.Name }
+
+// managedDesc is the description prefix on resources that take no labels.
+func (b *Box) managedDesc() string { return "devbox " + b.C.Name + ": " }
+
+func (b *Box) labelFix(kind, name string) string {
+	return fmt.Sprintf("if it really is this box's, label it: gcloud compute %s add-labels %s --labels=%s=%s", kind, name, config.LabelKey, b.C.Name)
+}

@@ -70,7 +70,8 @@ gp() { git push "$@"; }
 gt() { git tag "v$(< VERSION)" && sleep 2 && git push origin "v$(< VERSION)"; }
 
 alias tl='tmux list-sessions'
-alias ta='tmux attach -t'
+# Attach to the session whose name ends in $1: `ta api` finds acme-api.
+ta() { tmux attach -t "*$1"; }
 
 ########  prompt
 

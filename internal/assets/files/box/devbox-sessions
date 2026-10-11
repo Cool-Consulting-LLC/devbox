@@ -34,6 +34,7 @@ for envf in /srv/code/*/.devbox-env; do
   [ "$ok" = 1 ] || continue
 
   tmux new-session -d -s "$s" -c "$dir" "${args[@]}"
-  if [ "$dotenv" = 1 ]; then (umask 077; printf '%s\n' "${lines[@]}" > "$dir/.env"); fi
+  # An explicit mode, not umask: /srv/code's default ACLs override the umask.
+  if [ "$dotenv" = 1 ]; then install -m 600 /dev/null "$dir/.env" && printf '%s\n' "${lines[@]}" > "$dir/.env"; fi
   [ "${QUIET:-}" ] || echo "devbox-sessions: created $s"
 done

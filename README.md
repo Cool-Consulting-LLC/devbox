@@ -7,9 +7,9 @@ A Claude Code workstation in your own GCP project, reachable over your tailnet, 
 `devbox` makes a GCP project match `devbox.yaml`. It finds everything it created by the label `devbox=<name>` or the name prefix `<name>-`, so there is no state to keep.
 
 **The box**
-- An Ubuntu 24.04 VM (`e2-standard-2` by default) on an existing VPC subnet.
+- An Ubuntu 24.04 VM (`e2-standard-4` by default: 4 vCPU, 16 GB) on an existing VPC subnet.
 - Reached over Tailscale SSH or mosh. Two fallbacks: SSH through IAP, and an optional break-glass firewall rule for one address.
-- You log in with your Google account through OS Login. OS Login admins get sudo.
+- You log in with your Google account through OS Login. Nobody has sudo on the box, so agents cannot get root from a shell. Root runs only the provision.sh in instance metadata, which only the GCP API can change.
 - It suspends itself after 60 idle minutes: no keyboard input in any terminal, no Claude Code session mid-turn and no non-interactive SSH session (`devbox reprovision`, scp, port forwards). An open but untouched mosh or SSH window does not keep it up. Suspend keeps memory, so tmux and Claude Code sessions survive. Resuming takes about 30 seconds.
 - Email alerts: CPU above 80% for 5 minutes, CPU below 5% for 6 hours (something kept the box up, or the idle timer is broken), `/srv/code` above 85%.
 
@@ -22,11 +22,12 @@ A Claude Code workstation in your own GCP project, reachable over your tailnet, 
 - A dedicated ed25519 key, separate from your personal keys, lives in Secret Manager.
 - At boot it is loaded into a system ssh-agent and never written to the box's disk.
 - It authenticates to GitHub and signs commits (SSH signing; GitHub shows them as Verified).
-- Only admins can use the agent; each connection is checked against OS Login.
+- Only OS Login admins can use the agent; each connection is checked against OS Login. Agents run as you, so they can use it too.
 
 **Claude Code**
 - Installed from Anthropic's signed apt repository.
-- Managed settings and a hook deny agents `git commit`, `git push`, `terraform apply/destroy` and `devbox apply/destroy`. This is policy, not a security boundary; branch protection on GitHub is the real backstop.
+- Managed settings and a hook deny agents `git commit`, `git push`, `terraform apply/destroy` and `devbox apply/destroy`. This is policy, not a security boundary: see [Security](#security). Branch protection on GitHub is the real backstop.
+- The GitHub CLI (`gh`) is installed from GitHub's signed apt repository. If you `gh auth login` on the box, agents can use that token.
 - A status line in every session: directory and branch, the gcloud identity and project the session was given, whether that identity has Application Default Credentials, how full `/srv/code` is, context and rate-limit meters, session cost, and the model.
 
 **Projects**
@@ -46,7 +47,40 @@ A Claude Code workstation in your own GCP project, reachable over your tailnet, 
 
 `destroy` never touches the project, the VPC or which APIs are enabled.
 
-**Cost:** about $11 a month while suspended (disks plus suspended memory). Running adds the region's `e2-standard-2` on-demand price and an ephemeral IP. `./devbox status` prints an estimate.
+## Security
+
+Read this before you put anything on the box that you care about. devbox is built for one person running Claude Code agents in a GCP project of their own. It is not a sandbox, and the agents are not contained.
+
+### Agents can do anything you can
+
+Claude Code agents run as your user. Anything you can do on the box, they can do too. That includes:
+
+- **Reading every secret the box can read.** The box's service account can read the Tailscale OAuth secret, the machine SSH private key and every project secret. Any process on the box can get that account's token from the metadata server, so `devbox-secret devbox-ssh-key` prints the private key, whoever runs it.
+- **Using the machine key**: pushing wherever the key can push, and making commits that GitHub shows as Verified.
+- **Using the Tailscale OAuth secret** to mint auth keys and join new devices to your tailnet as `tag:devbox`.
+- **Using any gcloud identity you log in to on the box**, with all of its permissions. If that identity can edit instances in the devbox project, it can set a startup script on the box and become root.
+- **Reading project secrets** from the tmux session environment, and anything else under `/srv/code`.
+
+The deny rules and the guard hook stop a well-behaved agent from committing, pushing or applying by accident. They are easy to get around, and they do not stop a prompt-injected one.
+
+### What does hold
+
+- **No sudo on the box, for anyone.** provision.sh overrides the passwordless sudo that OS Login gives admins. Two commands are left, and both are safe for anyone: enrolling yourself, and re-running provision.sh. Re-running fetches the script from instance metadata, so changing what root runs takes GCP permission on the project (`compute.instances.setMetadata`), not a shell on the box. `devbox reprovision` updates the metadata, then triggers the re-run.
+- **Root runs nothing from `/srv/code`.** Every enrolled user can write that disk. Its scripts live on the boot disk, and the disk is sticky, so a user cannot swap out what root reads.
+- **Other users stay out.** People who can log in but are not OS Login admins get no `/srv/code` and no SSH agent. An admin who is demoted loses `/srv/code` at the next provision.
+- **Each box reads only its own secrets.** Access is granted secret by secret: the two named in `devbox.yaml`, plus the project secrets that `devbox project secret` stores for that box.
+- **Nothing reaches the box from the internet** except IAP on port 22, plus the break-glass address if you enable it. `devbox preflight` fails if other firewall rules in the network would expose the box.
+- **devbox changes and deletes only what it created**: resources labelled `devbox=<name>`, or with its own description where a resource takes no labels. If something else already has the name, devbox refuses to touch it.
+
+### Limiting the damage
+
+- **Give the machine key as little reach as possible.** Step 4 adds it to your own GitHub account, so it can push to everything you can. A machine user, or deploy keys on just the repositories you work in, limit what a leaked key can do. Protect your important branches and require reviews.
+- **Decide whether the box may hold credentials for its own project.** Running `devbox reprovision` on the box needs Application Default Credentials there that can set the instance's metadata, such as your own owner or editor login. Agents can use that login too. Anyone who can set metadata can add a startup script and become root at the next boot, so with that login on the box, the no-sudo rule no longer stops an agent that wants root. If you want it to hold, run `devbox reprovision` from the laptop, and on the box log in only to identities that cannot edit the devbox project.
+- **Treat the Tailscale OAuth secret as tailnet access.** It is read only when `/srv/code` has no Tailscale state yet, so after the first join you can rotate or delete the OAuth client and create a new one before a fresh disk needs it.
+- **Keep the box in a project of its own.** Anyone with `compute.instances.setMetadata` there (editor, owner) can become root on the box. Anyone who can read its disks or snapshots can copy the box's identity: Tailscale node key, SSH host keys, and Claude and gcloud logins.
+- **Known gap:** secret values pass briefly through process arguments when a tmux session is created, and the box's metadata token appears in `curl`'s arguments. Any local user can see process arguments.
+
+**Cost:** about $12 a month while suspended (disks plus suspended memory). Running adds the region's `e2-standard-4` on-demand price and an ephemeral IP. `./devbox status` prints an estimate.
 
 ## How to use it
 
@@ -54,7 +88,7 @@ A Claude Code workstation in your own GCP project, reachable over your tailnet, 
 
 ```bash
 ./devbox up                                   # create what is missing; resume if suspended
-mosh slava@devbox -- tmux new -A -s main      # or: ssh slava@devbox
+mosh you@devbox -- tmux new -A -s main        # or: ssh you@devbox
 ./devbox down                                 # suspend; sessions survive
 ./devbox status                               # what exists, its state, what it costs
 ```
@@ -124,7 +158,7 @@ Only `_out` is ever shared, never `/srv/code`, which holds every project.
 ```bash
 rsync -aHAX --info=progress2 --partial-dir=.rsync-partial -z --timeout=120 \
       -e 'ssh -o ControlMaster=auto -o ControlPath=~/.ssh/cm-%C -o ControlPersist=10m' \
-      ./dataset/ slava@devbox:/srv/code/acme-api/dataset/
+      ./dataset/ you@devbox:/srv/code/acme-api/dataset/
 ```
 
 **One file.** On the box:
@@ -153,6 +187,7 @@ Stop serving with `tailscale serve --https=443 off`.
 
 - Run `./devbox apply --dry-run` first; it prints the plan and changes nothing.
 - `apply` asks before a restart or a replacement, and always resumes a suspended box before changing it.
+- `reprovision` works on the box too, given Google credentials that can update the instance; see [Security](#security) before you log in there with them.
 - If the tailnet is down, use `./devbox reprovision --iap`.
 - Every key's tier is in [docs/config.md](docs/config.md).
 
@@ -203,7 +238,7 @@ In `devbox.yaml`, set `project_id`, `git.name`, `git.email` and `alerts.email`. 
 
 ### 2. Network
 
-`devbox` never creates or deletes networks. Give it a VPC and a subnet in the zone's region. It adds only its own firewall rules:
+`devbox` never creates or deletes networks. Give it a VPC and a subnet in the zone's region. It adds only its own firewall rules. Use a network of its own: GCP's network called `default` usually comes with `default-allow-ssh`, which opens port 22 to the whole internet, and `preflight` fails on it.
 
 ```bash
 P=YOUR-PROJECT
@@ -216,20 +251,22 @@ Then set `network.name: devbox` and `network.subnet: devbox-europe-west4` in `de
 
 ### 3. Tailscale
 
-1. **Access controls.** Switch to the **JSON editor** and add these keys inside the outer `{ … }`, merging with any keys that already exist. `"users"` is your login name on the box (see step 5); `autogroup:nonroot` works until you know it.
+1. **Access controls.** Switch to the **JSON editor** and add these keys inside the outer `{ … }`, merging with any keys that already exist. Replace `you@example.com` with your Tailscale login, and `you` with your login name on the box (see step 5). `./devbox preflight` prints the SSH rule with your own values filled in.
    ```
    "tagOwners": { "tag:devbox": ["autogroup:admin"] },
    "ssh": [
-     { "action": "accept", "src": ["autogroup:member"], "dst": ["tag:devbox"], "users": ["slava", "root"] }
+     { "action": "accept", "src": ["you@example.com"], "dst": ["tag:devbox"], "users": ["you"] }
    ],
    "nodeAttrs": [
-     { "target": ["tag:devbox"],       "attr": ["drive:share"] },
-     { "target": ["autogroup:member"], "attr": ["drive:access"] }
+     { "target": ["tag:devbox"],      "attr": ["drive:share"] },
+     { "target": ["you@example.com"], "attr": ["drive:access"] }
    ],
    ```
+   Only you can SSH in, and never as `root`. Do not use `autogroup:member` here: in a shared tailnet, that gives every member a shell on the box.
+
    Add this entry to the existing `"grants"` list. It allows the Finder mount; you can leave it and the `nodeAttrs` out.
    ```
-   { "src": ["autogroup:member"], "dst": ["tag:devbox"],
+   { "src": ["you@example.com"], "dst": ["tag:devbox"],
      "app": { "tailscale.com/cap/drive": [{ "shares": ["out"], "access": "rw" }] } }
    ```
 2. **OAuth client.** Go to Settings → **Trust credentials** → Credential → OAuth. Choose scope **Auth Keys (write)** and tag `tag:devbox`, then Generate credential. Store the secret, which is shown only once:
@@ -248,15 +285,17 @@ gh ssh-key add devbox_ed25519.pub --type signing --title devbox
 gcloud secrets versions access latest --secret devbox-ssh-key >/dev/null && rm -P devbox_ed25519 devbox_ed25519.pub
 ```
 
-Both `gh ssh-key add` lines are needed. With only the first, pushes work but commits show Unverified. The last line deletes the local copy only after the secret is confirmed to exist.
+Both `gh ssh-key add` lines are needed. With only the first, pushes work but commits show Unverified. The last line deletes the local copy only after the secret is confirmed to exist. `rm -P` is macOS; on Linux, use `shred -u`.
+
+This key goes on your own account, so anything on the box, agents included, can push wherever you can. To limit that, add it to a GitHub machine user instead, or as a deploy key on each repository (see [Security](#security)).
 
 ### 5. Your login name (optional)
 
-OS Login derives your name from your email, for example `slava_coolconsulting_lol`. To use a short name, a Google Workspace super admin can set it with [users.patch](https://developers.google.com/admin-sdk/directory/reference/rest/v1/users/patch). Use **Try it**, with `userKey` set to your email, and this body:
+OS Login derives your name from your email, for example `you_example_com`. To use a short name, a Google Workspace super admin can set it with [users.patch](https://developers.google.com/admin-sdk/directory/reference/rest/v1/users/patch). Use **Try it**, with `userKey` set to your email, and this body:
 
 ```json
-{ "posixAccounts": [{ "username": "slava", "uid": "YOUR_CURRENT_UID", "gid": "YOUR_CURRENT_UID",
-    "homeDirectory": "/home/slava", "shell": "/bin/bash", "operatingSystemType": "linux", "primary": true }] }
+{ "posixAccounts": [{ "username": "you", "uid": "YOUR_CURRENT_UID", "gid": "YOUR_CURRENT_UID",
+    "homeDirectory": "/home/you", "shell": "/bin/bash", "operatingSystemType": "linux", "primary": true }] }
 ```
 
 Find the current uid with `gcloud compute os-login describe-profile`. Keep the same uid, so files on `/srv/code` stay yours. The new name applies to every OS Login VM in the organization.
@@ -272,7 +311,7 @@ Provisioning takes about 3 minutes after `up` returns.
 
 ### 7. First login, over IAP
 
-On a new code disk, the first login must go through IAP. That login is what grants your account sudo and enrolls it on `/srv/code`. After it, Tailscale SSH alone is enough, including after replacements.
+Log in through IAP the first time. That login creates your OS Login account, and it enrolls you on `/srv/code` if you are an OS Login admin. After that, Tailscale SSH is enough, including after replacements.
 
 ```bash
 gcloud compute ssh devbox --zone europe-west4-a --tunnel-through-iap
@@ -281,7 +320,7 @@ gcloud compute ssh devbox --zone europe-west4-a --tunnel-through-iap
 Then, from the laptop:
 
 ```bash
-ssh slava@devbox 'ssh-add -L; ssh -T git@github.com'
+ssh you@devbox 'ssh-add -L; ssh -T git@github.com'
 ```
 
 You should see the `devbox` key, then "Hi <you>! You've successfully authenticated".
@@ -311,8 +350,13 @@ Managed settings, the guard hook and the status line script live under `internal
 On the box:
 
 ```bash
-sudo tailscale set --operator=$USER
 tailscale drive share out /srv/code/_out
 ```
 
+provision.sh makes you the Tailscale operator, which is what lets you run `tailscale drive` and `tailscale serve` without root. Agents can run them too. Funnel, which would put a share on the public internet, stays off unless your access controls grant the `funnel` attribute.
+
 Both settings live with the box's Tailscale identity on `/srv/code` and survive replacements.
+
+## License
+
+[CC BY-SA 4.0](LICENSE). Creative Commons does not recommend its licenses for software, so if you need to combine this with code under a software license, ask first.

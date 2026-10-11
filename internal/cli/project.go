@@ -14,8 +14,6 @@ import (
 	"github.com/Cool-Consulting-LLC/devbox/internal/remote"
 )
 
-func stringsReader(s string) io.Reader { return strings.NewReader(s) }
-
 func projectCmd(g *globals) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "project",
@@ -243,8 +241,9 @@ func projectSecretCmd(g *globals) *cobra.Command {
 		Use:   "secret <project> <KEY>",
 		Short: "Store a project secret, reference it from the env",
 		Long: `Reads the value from stdin (hidden prompt on a terminal), stores it in Secret
-Manager as devbox-<project>-<KEY> labelled devbox=<name>, and sets
-KEY=@secret:devbox-<project>-<KEY> in /srv/code/<project>/.devbox-env.
+Manager as <name>-<project>-<KEY> labelled devbox=<name>, grants the box read
+access to that one secret, and sets KEY=@secret:<name>-<project>-<KEY> in
+/srv/code/<project>/.devbox-env.
 
 Running it again for the same KEY rotates: a new version is added and older
 ones are disabled. Sessions read secrets when they are created, so restart the
@@ -257,13 +256,13 @@ project's session on the box: devbox-sessions --recreate <project>.
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			project, key := args[0], args[1]
-			id, err := box.ProjectSecretID(project, key)
-			if err != nil {
-				return err
-			}
 			ctx, cancel := signalCtx()
 			defer cancel()
 			b, err := g.load(ctx)
+			if err != nil {
+				return err
+			}
+			id, err := box.ProjectSecretID(b.C.Name, project, key)
 			if err != nil {
 				return err
 			}

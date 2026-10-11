@@ -3,8 +3,8 @@ package box
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
+	"strings"
 
 	compute "google.golang.org/api/compute/v1"
 
@@ -17,6 +17,9 @@ func (b *Box) getCodeDisk(ctx context.Context) (*compute.Disk, error) {
 	d, err := b.G.Compute.Disks.Get(b.C.ProjectID, b.C.Zone, b.C.CodeDiskName()).Context(ctx).Do()
 	if gcp.IsNotFound(err) {
 		return nil, nil
+	}
+	if err == nil && !b.ownsLabels(d.Labels) {
+		return d, b.notOurs("disk", d.Name, b.labelFix("disks", d.Name+" --zone "+b.C.Zone))
 	}
 	return d, err
 }
@@ -48,21 +51,6 @@ func (b *Box) planCodeDisk(ctx context.Context, p *Plan) error {
 				&compute.DisksResizeRequest{SizeGb: b.C.CodeDiskGB}).Context(ctx).Do())
 		}})
 	}
-	if d != nil && !maps.Equal(d.Labels, b.C.Labels()) {
-		p.add(Op{Resource: res, Action: "update", Detail: "labels", Run: func(ctx context.Context) error {
-			d, err := b.getCodeDisk(ctx)
-			if err != nil {
-				return err
-			}
-			labels := maps.Clone(d.Labels)
-			if labels == nil {
-				labels = map[string]string{}
-			}
-			maps.Copy(labels, b.C.Labels())
-			return b.G.Await(ctx)(b.G.Compute.Disks.SetLabels(b.C.ProjectID, b.C.Zone, b.C.CodeDiskName(),
-				&compute.ZoneSetLabelsRequest{Labels: labels, LabelFingerprint: d.LabelFingerprint}).Context(ctx).Do())
-		}})
-	}
 	return nil
 }
 
@@ -89,6 +77,9 @@ func (b *Box) getSnapshotPolicy(ctx context.Context) (*compute.ResourcePolicy, e
 	rp, err := b.G.Compute.ResourcePolicies.Get(b.C.ProjectID, b.C.Region(), b.C.SnapshotPolicyName()).Context(ctx).Do()
 	if gcp.IsNotFound(err) {
 		return nil, nil
+	}
+	if err == nil && !strings.HasPrefix(rp.Description, b.managedDesc()) {
+		return rp, b.notOurs("snapshot schedule", rp.Name, "delete it if it is a leftover")
 	}
 	return rp, err
 }

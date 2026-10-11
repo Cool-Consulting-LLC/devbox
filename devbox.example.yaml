@@ -6,19 +6,19 @@ create_project: false            # BACKLOGGED. Refuses today.
 zone: europe-west4-a             # region is derived
 name: devbox
 
-network:
-  name: default                  # an existing VPC in this project
-  subnet: default
+network:                         # an existing VPC; README.md step 2 creates this one
+  name: devbox                   # avoid GCP's "default" network: it allows SSH from anywhere
+  subnet: devbox-europe-west4
 
-machine_type: e2-standard-2
+machine_type: e2-standard-4
 external_ip: true
 code_disk_gb: 50
 boot_disk_gb: 30
-extra_packages: []               # runtimes, e.g. [nodejs, python3-venv]
+extra_packages: []               # runtimes, e.g. [python3-venv]
 
 git:
-  name: "Svyatoslav I. Maslennikov"
-  email: me@smaslennikov.com
+  name: "Ada Lovelace"
+  email: ada@example.com
 
 tailscale:
   tag: tag:devbox
@@ -32,7 +32,7 @@ snapshots:
   retention_days: 14
 
 alerts:
-  email: slava@coolconsulting.lol
+  email: ada@example.com
   cpu_high_pct: 80               # sustained 5m
   cpu_idle_pct: 5                # sustained 6h: something kept the box up
   disk_used_pct: 85

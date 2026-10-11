@@ -6,8 +6,11 @@ agent cannot serve OS Login users directly. This root relay owns the shared
 socket, reads each peer's uid from the kernel (SO_PEERCRED), and forwards only
 admins: root, users OS Login says hold adminLogin right now (asked of the
 metadata server, the same source the OS Login PAM module uses), and members of
-the local sudo or google-sudoers groups. Anyone else is refused. The rule is
-"can sudo", because anyone who can sudo can read the key anyway.
+the local sudo or google-sudoers groups. Anyone else is refused.
+
+This keeps other users off the agent. It does not keep the key from an admin's
+own processes, agents included: they can use the agent, and the box's service
+account can read the key from Secret Manager (README.md, Security).
 """
 import grp
 import json

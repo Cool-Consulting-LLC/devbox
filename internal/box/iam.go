@@ -10,6 +10,7 @@ import (
 	crm "google.golang.org/api/cloudresourcemanager/v1"
 	compute "google.golang.org/api/compute/v1"
 	iam "google.golang.org/api/iam/v1"
+	secretmanager "google.golang.org/api/secretmanager/v1"
 
 	"github.com/Cool-Consulting-LLC/devbox/internal/config"
 	"github.com/Cool-Consulting-LLC/devbox/internal/gcp"
@@ -20,10 +21,7 @@ var suspendPermissions = []string{"compute.instances.suspend"}
 // Unconditional project roles for the Ops Agent.
 var agentRoles = []string{"roles/logging.logWriter", "roles/monitoring.metricWriter"}
 
-const (
-	secretRole           = "roles/secretmanager.secretAccessor"
-	secretConditionTitle = "devbox-secrets"
-)
+const secretRole = "roles/secretmanager.secretAccessor"
 
 func (b *Box) saName() string {
 	return fmt.Sprintf("projects/%s/serviceAccounts/%s", b.C.ProjectID, b.C.SAEmail())
@@ -34,7 +32,14 @@ func (b *Box) getSA(ctx context.Context) (*iam.ServiceAccount, error) {
 	if gcp.IsNotFound(err) {
 		return nil, nil
 	}
+	if err == nil && sa.Description != b.saDescription() {
+		return sa, b.notOurs("service account", b.C.SAEmail(), "delete it if it is a leftover")
+	}
 	return sa, err
+}
+
+func (b *Box) saDescription() string {
+	return "Identity of the devbox instance " + b.C.Name + ". Managed by the devbox binary."
 }
 
 func (b *Box) planServiceAccount(ctx context.Context, p *Plan) error {
@@ -56,7 +61,7 @@ func (b *Box) planServiceAccount(ctx context.Context, p *Plan) error {
 			AccountId: b.C.Name,
 			ServiceAccount: &iam.ServiceAccount{
 				DisplayName: "devbox " + b.C.Name,
-				Description: "Identity of the devbox instance " + b.C.Name + ". Managed by the devbox binary.",
+				Description: b.saDescription(),
 			},
 		}).Context(ctx).Do()
 		if err != nil {
@@ -111,20 +116,6 @@ func (b *Box) planSuspendRole(ctx context.Context, p *Plan) error {
 	return nil
 }
 
-// secretCondition limits secretAccessor to devbox-* secrets. Secret Manager resource
-// names in IAM conditions use the project number, not the ID.
-func (b *Box) secretCondition(ctx context.Context) (*crm.Expr, error) {
-	num, err := b.ProjectNumber(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &crm.Expr{
-		Title:       secretConditionTitle,
-		Description: "devbox: read secrets named " + config.SecretPrefix + "*",
-		Expression:  fmt.Sprintf(`resource.name.startsWith("projects/%s/secrets/%s")`, num, config.SecretPrefix),
-	}, nil
-}
-
 func (b *Box) getProjectPolicy(ctx context.Context) (*crm.Policy, error) {
 	return b.G.CRM.Projects.GetIamPolicy(b.C.ProjectID, &crm.GetIamPolicyRequest{
 		Options: &crm.GetPolicyOptions{RequestedPolicyVersion: 3},
@@ -152,17 +143,28 @@ func sameExpr(a, b *crm.Expr) bool {
 }
 
 // missingProjectBindings lists the role names not yet granted.
-func (b *Box) missingProjectBindings(pol *crm.Policy, cond *crm.Expr) []string {
+func (b *Box) missingProjectBindings(pol *crm.Policy) []string {
 	var miss []string
 	for _, r := range agentRoles {
 		if !hasMember(pol, r, b.C.SAMember(), nil) {
 			miss = append(miss, r)
 		}
 	}
-	if !hasMember(pol, secretRole, b.C.SAMember(), cond) {
-		miss = append(miss, secretRole+" (devbox-* only)")
-	}
 	return miss
+}
+
+// hasProjectSecretGrant finds secretAccessor granted on the whole project, with
+// or without a condition. Earlier versions granted it conditioned on the devbox-
+// name prefix, which every box in the project matched (devbox- is a prefix of
+// devbox-test-), so one box could read another's machine key. Access is now
+// granted on each secret instead, and this grant is revoked.
+func (b *Box) hasProjectSecretGrant(pol *crm.Policy) bool {
+	for _, bd := range pol.Bindings {
+		if bd.Role == secretRole && slices.Contains(bd.Members, b.C.SAMember()) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Box) planProjectIAM(ctx context.Context, p *Plan) error {
@@ -170,23 +172,108 @@ func (b *Box) planProjectIAM(ctx context.Context, p *Plan) error {
 	if err != nil {
 		return fmt.Errorf("project IAM policy: %w", err)
 	}
-	cond, err := b.secretCondition(ctx)
-	if err != nil {
-		return fmt.Errorf("project number: %w", err)
-	}
-	miss := b.missingProjectBindings(pol, cond)
-	if len(miss) == 0 {
+	miss := b.missingProjectBindings(pol)
+	revoke := b.hasProjectSecretGrant(pol)
+	if len(miss) == 0 && !revoke {
 		return nil
 	}
-	p.add(Op{Resource: "project IAM", Action: "update", Detail: fmt.Sprintf("grant %v", miss), Run: func(ctx context.Context) error {
+	var what []string
+	if len(miss) > 0 {
+		what = append(what, fmt.Sprintf("grant %v", miss))
+	}
+	if revoke {
+		what = append(what, "revoke project-wide "+secretRole)
+	}
+	p.add(Op{Resource: "project IAM", Action: "update", Detail: strings.Join(what, "; "), Run: func(ctx context.Context) error {
 		return b.editProjectPolicy(ctx, func(pol *crm.Policy) {
 			for _, r := range agentRoles {
 				addMember(pol, r, b.C.SAMember(), nil)
 			}
-			addMember(pol, secretRole, b.C.SAMember(), cond)
+			removeMember(pol, b.C.SAMember(), secretRole)
 		})
 	}})
 	return nil
+}
+
+// --- per-secret grants ---
+
+// boxSecretIDs are the secrets this box reads: the two named in devbox.yaml, and
+// every secret labelled devbox=<name>, which is how `devbox project secret`
+// stores project secrets.
+func (b *Box) boxSecretIDs(ctx context.Context) ([]string, error) {
+	ids := []string{b.C.Tailscale.OAuthSecret, b.C.SSHKey.Secret}
+	labelled, err := b.ListLabelledSecrets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range labelled {
+		if id := gcp.Last(s.Name); !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func secretGranted(pol *secretmanager.Policy, member string) bool {
+	for _, bd := range pol.Bindings {
+		if bd.Role == secretRole && bd.Condition == nil && slices.Contains(bd.Members, member) {
+			return true
+		}
+	}
+	return false
+}
+
+// planSecretIAM grants the box's service account secretAccessor on each of its
+// own secrets and nothing else. A missing secret is checkSecrets' to report.
+func (b *Box) planSecretIAM(ctx context.Context, p *Plan) error {
+	ids, err := b.boxSecretIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("secrets: %w", err)
+	}
+	for _, id := range ids {
+		pol, err := b.G.Secrets.Projects.Secrets.GetIamPolicy(b.secretName(id)).Context(ctx).Do()
+		if gcp.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("secret %s IAM policy: %w", id, err)
+		}
+		if secretGranted(pol, b.C.SAMember()) {
+			continue
+		}
+		p.add(Op{Resource: "secret " + id, Action: "update", Detail: "let " + b.C.Name + " read it", Run: func(ctx context.Context) error {
+			return b.grantSecret(ctx, id)
+		}})
+	}
+	return nil
+}
+
+// grantSecret is a read-modify-write of one secret's IAM policy, retried on
+// etag races and on a service account IAM cannot see yet.
+func (b *Box) grantSecret(ctx context.Context, id string) error {
+	retryable := func(err error) bool { c := gcp.Code(err); return c == 409 || c == 400 || c == 412 }
+	return gcp.Retry(ctx, 90*time.Second, retryable, func() error {
+		pol, err := b.G.Secrets.Projects.Secrets.GetIamPolicy(b.secretName(id)).Context(ctx).Do()
+		if err != nil {
+			return err
+		}
+		if secretGranted(pol, b.C.SAMember()) {
+			return nil
+		}
+		found := false
+		for _, bd := range pol.Bindings {
+			if bd.Role == secretRole && bd.Condition == nil {
+				bd.Members = append(bd.Members, b.C.SAMember())
+				found = true
+				break
+			}
+		}
+		if !found {
+			pol.Bindings = append(pol.Bindings, &secretmanager.Binding{Role: secretRole, Members: []string{b.C.SAMember()}})
+		}
+		_, err = b.G.Secrets.Projects.Secrets.SetIamPolicy(b.secretName(id), &secretmanager.SetIamPolicyRequest{Policy: pol}).Context(ctx).Do()
+		return err
+	})
 }
 
 func addMember(pol *crm.Policy, role, member string, cond *crm.Expr) {

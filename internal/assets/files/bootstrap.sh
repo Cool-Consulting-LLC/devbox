@@ -1,11 +1,10 @@
 #!/bin/bash
 # devbox-bootstrap: run once per instance by cloud-init. Replace tier.
-# Gets the box to the point where it can run provision.sh from the pet disk.
+# Gets the box to the point where devbox-provision.service can take over.
 set -euo pipefail
 exec > >(tee -a /var/log/devbox-bootstrap.log) 2>&1
 
 DEV=/dev/disk/by-id/google-code
-MD=http://metadata.google.internal/computeMetadata/v1
 
 for _ in $(seq 60); do [ -e "$DEV" ] && break; sleep 2; done
 [ -e "$DEV" ] || { echo "code disk $DEV never appeared" >&2; exit 1; }
@@ -22,13 +21,22 @@ mountpoint -q /srv/code || mount /srv/code
 # The guest agent creates this group for OS Login admins; make sure it exists first.
 groupadd -f google-sudoers
 chgrp google-sudoers /srv/code
-chmod 2775 /srv/code
+# Sticky: enrolled users write here, and must not rename root's .devbox away.
+# No access for others: only enrolled admins, through their ACL, see projects.
+chmod 3770 /srv/code
 install -d -m 0755 -o root -g root /srv/code/.devbox
 
-# Google's apt repositories: gcloud and the Ops Agent.
+# Google's apt repositories: gcloud and the Ops Agent. The key is pinned by
+# fingerprint, as provision.sh pins its own: TLS alone trusts whoever answers.
 install -d -m 0755 /etc/apt/keyrings
-curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
-  | gpg --batch --yes --dearmor -o /etc/apt/keyrings/cloud.google.gpg
+key=$(mktemp)
+curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg -o "$key"
+got=$(gpg --show-keys --with-colons "$key" 2>/dev/null | awk -F: '$1=="pub"{p=1} $1=="fpr"&&p{print $10; p=0}')
+if [ "$got" != 35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3 ]; then
+  echo "Google apt key fingerprint mismatch ($got); refusing" >&2; exit 1
+fi
+gpg --batch --yes --dearmor -o /etc/apt/keyrings/cloud.google.gpg "$key"
+rm -f "$key"
 . /etc/os-release
 cat > /etc/apt/sources.list.d/google-cloud.list <<EOF
 deb [signed-by=/etc/apt/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main
@@ -39,12 +47,7 @@ for i in 1 2 3; do
   sleep $((i * 10))
 done
 
-# The canonical provision.sh ships in instance metadata; the disk copy is a cache.
-curl -fsS -H 'Metadata-Flavor: Google' "$MD/instance/attributes/devbox-provision" \
-  -o /srv/code/.devbox/provision.sh.new
-install -m 0755 /srv/code/.devbox/provision.sh.new /srv/code/.devbox/provision.sh
-rm -f /srv/code/.devbox/provision.sh.new
-
+# devbox-provision.service fetches provision.sh from metadata itself, every boot.
 systemctl daemon-reload
 systemctl enable --now devbox-ssh-agent.service
 # The relay's script is written by provision.sh, which starts it.

@@ -11,9 +11,12 @@ PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
 
 # Everything that runs on the box. Linted here as well as by the Go tests, so
 # `make lint` names the file and line rather than a test. No -s: each file
-# declares its shell, and profile.sh is POSIX sh, not bash.
+# declares its shell, and profile.sh is POSIX sh, not bash. The Python relay is
+# checked separately. assets_test.go fails if a box file is in neither list.
+BOX := $(GITROOT)/internal/assets/files/box
 SCRIPTS := $(sort $(wildcard $(GITROOT)/internal/assets/files/*.sh) \
-             $(addprefix $(GITROOT)/internal/assets/files/box/,devbox-secret devbox-sessions devbox-project devbox-enroll devbox-claude-statusline guard.sh idle-check.sh mosh-server profile.sh skel/.bashrc))
+             $(addprefix $(BOX)/,claude-activity.sh devbox-claude-statusline devbox-enroll devbox-project devbox-secret devbox-sessions devbox-tmux-colour guard.sh idle-check.sh mosh-server profile.sh skel/.bashrc))
+PYTHON := $(BOX)/devbox-agent-relay
 
 # Where the originals of the ported dotfiles live: your laptop's home.
 DOTFILES ?= $(HOME)
@@ -48,7 +51,8 @@ lint: ## Vet, check formatting, and shellcheck the box scripts if shellcheck is 
 	@unformatted=$$(gofmt -l $(GITROOT)); \
 	if [ -n "$$unformatted" ]; then echo "not gofmt'd:"; echo "$$unformatted"; exit 1; fi
 	@if command -v shellcheck >/dev/null; then shellcheck -S warning $(SCRIPTS); \
-	else echo "shellcheck not installed; skipping the box scripts"; fi
+	else echo "shellcheck not installed; skipping the box scripts (CI runs it)"; fi
+	@python3 -c 'import ast, sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]' $(PYTHON)
 
 fmt: ## Reformat Go
 	gofmt -w $(GITROOT)

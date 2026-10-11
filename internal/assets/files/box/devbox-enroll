@@ -1,13 +1,30 @@
 #!/bin/bash
-# devbox-enroll: give the calling admin read-write access to /srv/code. Run as
-# root through `sudo -n` from /etc/profile.d/devbox.sh at login, once per user.
-# OS Login grants sudo through /var/google-sudoers.d/<user>, not a group, so access
-# is an ACL on the user's uid. ACLs live on the pet disk and OS Login uids are
-# stable, so this survives every replacement.
+# devbox-enroll: set up the calling OS Login admin on this box: home directory,
+# linger, and read-write access to /srv/code. Run as root through `sudo -n` from
+# /etc/profile.d/devbox.sh at login. It is the one command anyone may run
+# through sudo (/etc/sudoers.d/zz-devbox), so it takes no arguments, trusts
+# nothing but the calling uid, and asks OS Login itself whether that uid is an
+# admin. Access is an ACL on the uid: ACLs live on the pet disk and OS Login
+# uids are stable, so this survives every replacement. provision.sh revokes it
+# when OS Login stops saying admin.
 set -euo pipefail
-u=${SUDO_USER:?run through sudo}
 uid=${SUDO_UID:?run through sudo}
 [ "$uid" != 0 ] || exit 0
+[ $# -eq 0 ] || { echo "devbox-enroll takes no arguments" >&2; exit 2; }
+
+MD=http://metadata.google.internal/computeMetadata/v1/oslogin
+md() { curl -fsS -H 'Metadata-Flavor: Google' "$MD/$1"; }
+profile=$(md "users?uid=$uid") || { echo "devbox-enroll: uid $uid is not an OS Login user" >&2; exit 1; }
+u=$(jq -r --arg uid "$uid" '.loginProfiles[0].posixAccounts[] | select(.uid == $uid) | .username' <<<"$profile" | head -n1)
+email=$(jq -r '.loginProfiles[0].name | @uri' <<<"$profile")
+[ -n "$u" ] || { echo "devbox-enroll: no POSIX account for uid $uid" >&2; exit 1; }
+if ! md "authorize?email=$email&policy=adminLogin" 2>/dev/null | jq -e .success >/dev/null 2>&1; then
+  echo "devbox-enroll: $u is not an OS Login admin (roles/compute.osAdminLogin)" >&2; exit 1
+fi
+
+# sshd's PAM creates a missing home at login; Tailscale SSH does not.
+home=$(getent passwd "$uid" | cut -d: -f6) || true
+if [ -n "$home" ] && [ ! -d "$home" ]; then mkhomedir_helper "$u" 0077; fi
 # Linger keeps user@.service up with no login session. Without it, logind stops
 # the user manager when the last session closes, and tmux 3.4 runs its panes in
 # that manager's scopes, so every tmux pane dies with it. Before the marker check
@@ -17,11 +34,13 @@ loginctl enable-linger "$u"
 mark=/srv/code/.devbox/enrolled/$uid
 [ -e "$mark" ] && exit 0
 
+# -P and ! -type l: never follow a symlink someone left on the disk, or this
+# would hand the new admin an ACL on whatever it points at.
 setfacl -m "u:$uid:rwx" -m "d:u:$uid:rwx" /srv/code
-# Everything already on the disk except the binary's own directory.
-find /srv/code -mindepth 1 -maxdepth 1 ! -name '.devbox' ! -name 'lost+found' \
-  -exec setfacl -R -m "u:$uid:rwX" -m "d:u:$uid:rwX" {} +
-install -d -m 0700 -o "$u" -g "$(id -gn "$u")" "/srv/code/.home/$u"
+find /srv/code -mindepth 1 -maxdepth 1 ! -name '.devbox' ! -name 'lost+found' ! -type l \
+  -exec setfacl -R -P -m "u:$uid:rwX" -m "d:u:$uid:rwX" {} +
+# As the user, not root: a symlink planted at this path must not become a root chown.
+runuser -u "$u" -- mkdir -p -m 0700 "/srv/code/.home/$u"
 
 install -d -m 0755 /srv/code/.devbox/enrolled
 date -Is > "$mark"

@@ -42,7 +42,7 @@ var boxFiles = []boxFile{
 	{"box/devbox-agent-relay", "/usr/local/sbin/devbox-agent-relay", "0755"},
 	{"box/devbox-enroll", "/usr/local/sbin/devbox-enroll", "0755"},
 	{"box/mosh-server", "/usr/local/bin/mosh-server", "0755"},
-	{"box/idle-check.sh", "/srv/code/.devbox/idle-check.sh", "0755"},
+	{"box/idle-check.sh", "/usr/local/sbin/devbox-idle-check", "0755"},
 	{"box/profile.sh", "/etc/profile.d/devbox.sh", "0644"},
 	{"box/tmux.conf", "/etc/tmux.conf", "0644"},
 	{"box/skel/.bashrc", "/etc/skel/.bashrc", "0644"},

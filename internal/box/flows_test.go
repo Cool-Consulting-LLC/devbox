@@ -2,12 +2,14 @@ package box
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
 	"strings"
 	"testing"
 
+	crm "google.golang.org/api/cloudresourcemanager/v1"
 	compute "google.golang.org/api/compute/v1"
 
 	"github.com/Cool-Consulting-LLC/devbox/internal/config"
@@ -94,20 +96,13 @@ func TestUpFromNothing(t *testing.T) {
 	if cd == nil || len(cd.ResourcePolicies) != 1 || !slices.Equal(cd.Users, []string{"devbox"}) {
 		t.Fatalf("code disk: %+v", cd)
 	}
-	if hasMember(f.projPolicy, secretRole, e.b.C.SAMember(), nil) {
-		t.Fatal("unconditional secretAccessor granted")
+	if e.b.hasProjectSecretGrant(f.projPolicy) {
+		t.Fatal("secretAccessor granted project-wide; it must be per secret")
 	}
-	found := false
-	for _, bd := range f.projPolicy.Bindings {
-		if bd.Role == secretRole {
-			if bd.Condition == nil || !strings.Contains(bd.Condition.Expression, `"projects/123456789/secrets/devbox-"`) {
-				t.Fatalf("secretAccessor must be conditioned on the project number: %+v", bd.Condition)
-			}
-			found = true
+	for _, id := range []string{"devbox-tailscale-oauth", "devbox-ssh-key"} {
+		if pol := f.secrets[id].policy; pol == nil || !secretGranted(pol, e.b.C.SAMember()) {
+			t.Fatalf("%s not readable by the box", id)
 		}
-	}
-	if !found {
-		t.Fatal("no secretAccessor binding")
 	}
 	if pol := f.instIAM["devbox"]; pol == nil || pol.Bindings[0].Role != e.b.C.SuspendRoleName() {
 		t.Fatal("self-suspend not granted on the instance")
@@ -170,7 +165,7 @@ func TestMachineTypeChangeOnSuspendedBox(t *testing.T) {
 	e := setup(t)
 	e.run(ModeUp)
 	e.f.instances["devbox"].Status = "SUSPENDED"
-	e.b.C.MachineType = "e2-standard-4"
+	e.b.C.MachineType = "e2-standard-8"
 
 	if p := e.plan(ModeUp); len(p.Disruptive()) != 0 || len(p.Warnings) == 0 {
 		t.Fatalf("up must skip the restart and say so: %s", opsString(p))
@@ -187,7 +182,7 @@ func TestMachineTypeChangeOnSuspendedBox(t *testing.T) {
 		}
 	}
 	in := e.f.instances["devbox"]
-	if in.Status != "RUNNING" || gcp.Last(in.MachineType) != "e2-standard-4" {
+	if in.Status != "RUNNING" || gcp.Last(in.MachineType) != "e2-standard-8" {
 		t.Fatalf("instance %s %s", in.Status, in.MachineType)
 	}
 	e.assertConverged()
@@ -446,10 +441,90 @@ func TestStoppedBoxStartsThenRestarts(t *testing.T) {
 		t.Fatalf("up on a stopped box did %v", got)
 	}
 	e.f.instances["devbox"].Status = "TERMINATED"
-	e.b.C.MachineType = "e2-standard-4"
+	e.b.C.MachineType = "e2-standard-8"
 	e.run(ModeApply)
-	if in := e.f.instances["devbox"]; in.Status != "RUNNING" || gcp.Last(in.MachineType) != "e2-standard-4" {
+	if in := e.f.instances["devbox"]; in.Status != "RUNNING" || gcp.Last(in.MachineType) != "e2-standard-8" {
 		t.Fatalf("%s %s", in.Status, in.MachineType)
 	}
 	e.assertConverged()
+}
+
+// Two boxes in one project: each reads its own secrets and none of the other's,
+// though one name is a prefix of the other.
+func TestSecretAccessIsPerBox(t *testing.T) {
+	e := setup(t)
+	e.f.addSecret("devbox-test-acme-api-KEY", "devbox-test", 1)
+	e.f.addSecret("devbox-acme-api-KEY", "devbox", 1)
+	e.run(ModeUp)
+	if !secretGranted(e.f.secrets["devbox-acme-api-KEY"].policy, e.b.C.SAMember()) {
+		t.Fatal("labelled project secret not granted")
+	}
+	if pol := e.f.secrets["devbox-test-acme-api-KEY"].policy; pol != nil && secretGranted(pol, e.b.C.SAMember()) {
+		t.Fatal("box devbox can read devbox-test's secret")
+	}
+	e.assertConverged()
+}
+
+// Boxes built before per-secret grants hold a project-wide conditional one.
+func TestLegacyProjectSecretGrantRevoked(t *testing.T) {
+	e := setup(t)
+	e.run(ModeUp)
+	cond := &crm.Expr{Title: "devbox-secrets", Expression: `resource.name.startsWith("projects/123456789/secrets/devbox-")`}
+	addMember(e.f.projPolicy, secretRole, e.b.C.SAMember(), cond)
+	e.f.projPolicy.Version = 3
+	p := e.run(ModeApply)
+	if got := actions(p); !slices.Equal(got, []string{"update project IAM"}) {
+		t.Fatalf("migration did %v", got)
+	}
+	if e.b.hasProjectSecretGrant(e.f.projPolicy) {
+		t.Fatal("legacy grant left in place")
+	}
+	e.assertConverged()
+}
+
+func TestPutSecretGrantsTheBox(t *testing.T) {
+	e := setup(t)
+	if _, err := e.b.PutSecret(e.ctx, "devbox-acme-api-KEY", "acme-api", []byte("v1")); err != nil {
+		t.Fatal(err) // no service account yet: stored, nothing to grant
+	}
+	e.run(ModeUp)
+	if _, err := e.b.PutSecret(e.ctx, "devbox-acme-api-NEW", "acme-api", []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	if !secretGranted(e.f.secrets["devbox-acme-api-NEW"].policy, e.b.C.SAMember()) {
+		t.Fatal("new secret not granted")
+	}
+	e.assertConverged()
+}
+
+// Resources are found by name. One by that name that devbox did not make is
+// never adopted, changed or deleted.
+func TestForeignResourcesAreLeftAlone(t *testing.T) {
+	e := setup(t)
+	e.f.instances["devbox"] = &compute.Instance{Name: "devbox", Zone: "zones/europe-west4-a", Status: "RUNNING",
+		Labels: map[string]string{"team": "data"}, Metadata: &compute.Metadata{Fingerprint: "x"}}
+	e.f.disks["devbox-code"] = &compute.Disk{Name: "devbox-code", SizeGb: 500, Status: "READY"}
+	e.f.firewalls["devbox-allow-iap-ssh"] = &compute.Firewall{Name: "devbox-allow-iap-ssh", Description: "someone's rule"}
+
+	if _, err := e.b.Reconcile(e.ctx, ModeApply); !errors.Is(err, ErrNotOurs) {
+		t.Fatalf("apply must refuse a foreign resource, got %v", err)
+	}
+	if _, err := e.b.SyncProvisionMetadata(e.ctx); !errors.Is(err, ErrNotOurs) {
+		t.Fatalf("reprovision must refuse a foreign instance, got %v", err)
+	}
+	p, err := e.b.PlanDestroy(e.ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range actions(p) {
+		if a == "delete instance devbox" || a == "delete disk devbox-code" || a == "delete firewall devbox-allow-iap-ssh" {
+			t.Fatalf("destroy would delete a foreign resource: %v", actions(p))
+		}
+	}
+	if len(p.Warnings) < 3 {
+		t.Fatalf("destroy should say what it kept: %v", p.Warnings)
+	}
+	if err := e.b.Status(e.ctx, io.Discard); err != nil {
+		t.Fatalf("status: %v", err)
+	}
 }

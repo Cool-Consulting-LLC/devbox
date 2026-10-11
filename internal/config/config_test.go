@@ -8,7 +8,14 @@ import (
 
 const minimal = `
 project_id: my-devbox-project
+network: {name: devbox, subnet: devbox-europe-west4}
 git: {name: A, email: a@example.com}
+`
+
+// noGit is minimal without git, for cases that set it.
+const noGit = `
+project_id: my-devbox-project
+network: {name: devbox, subnet: devbox-europe-west4}
 `
 
 func TestExampleParses(t *testing.T) {
@@ -30,7 +37,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Name != "devbox" || c.MachineType != "e2-standard-2" || c.CodeDiskGB != 50 || !c.WantExternalIP() || !c.IdleEnabled() {
+	if c.Name != "devbox" || c.MachineType != "e2-standard-4" || c.CodeDiskGB != 50 || !c.WantExternalIP() || !c.IdleEnabled() {
 		t.Fatalf("defaults not applied: %+v", c)
 	}
 }
@@ -45,7 +52,11 @@ func TestRejects(t *testing.T) {
 		"empty cidr":      minimal + "break_glass: {enabled: true}",
 		"wide cidr":       minimal + "break_glass: {enabled: true, source_cidr: 10.0.0.0/8}",
 		"host bits":       minimal + "break_glass: {enabled: true, source_cidr: 1.2.3.4/24}",
-		"secret prefix":   minimal + "tailscale: {oauth_secret: ts-oauth}",
+		"bad secret id":   minimal + "tailscale: {oauth_secret: 'ts/oauth'}",
+		"no network":      "project_id: my-devbox-project\ngit: {name: A, email: a@b.c}",
+		"newline in name": noGit + "git: {name: \"A\\n[core]\\n\\tsshCommand = x\", email: a@b.c}",
+		"space in email":  noGit + "git: {name: A, email: 'a b@c.d'}",
+		"newline nested":  minimal + "extra_packages: [\"nodejs\\n\"]",
 		"bad name":        minimal + "name: Dev_Box",
 		"short name":      minimal + "name: dev",
 		"snapshot time":   minimal + "snapshots: {start_time: '03:30'}",
@@ -62,11 +73,13 @@ func TestRejects(t *testing.T) {
 
 func TestAccepts(t *testing.T) {
 	for _, y := range []string{
+		noGit + "git: {name: \"Ada Lovelace\", email: ada@example.com}",
 		minimal + "break_glass: {enabled: true, source_cidr: 203.0.113.7/32}",
 		minimal + "break_glass: {enabled: true, source_cidr: '2001:db8::/64', allow_mosh: true}",
 		minimal + "break_glass: {enabled: false, source_cidr: 0.0.0.0/0}", // ignored when disabled
 		minimal + "external_ip: false\nidle_suspend: {enabled: false}",
 		minimal + "extra_packages: [nodejs, python3-venv, golang-1.22]",
+		minimal + "tailscale: {oauth_secret: ts-oauth}", // any secret ID: access is granted per secret
 	} {
 		if _, err := Parse([]byte(y)); err != nil {
 			t.Errorf("rejected %q: %v", y, err)

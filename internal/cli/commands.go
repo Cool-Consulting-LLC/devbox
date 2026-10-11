@@ -11,9 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Cool-Consulting-LLC/devbox/internal/assets"
 	"github.com/Cool-Consulting-LLC/devbox/internal/box"
 	"github.com/Cool-Consulting-LLC/devbox/internal/config"
+	"github.com/Cool-Consulting-LLC/devbox/internal/gcp"
 	"github.com/Cool-Consulting-LLC/devbox/internal/remote"
 )
 
@@ -44,7 +44,8 @@ for each failure. Exits non-zero if anything is FAIL or MISSING.
 				return err
 			}
 			if res.PosixUser != "" {
-				fmt.Printf("\nTailscale SSH policy users for this box: [%q, \"root\"]\n", res.PosixUser)
+				fmt.Printf("\nTailscale SSH rule for this box (README.md, step 3):\n")
+				fmt.Printf("  { \"action\": \"accept\", \"src\": [%q], \"dst\": [\"tag:devbox\"], \"users\": [%q] }\n", res.Email, res.PosixUser)
 			}
 			if !res.OK {
 				return errors.New("preflight failed")
@@ -89,7 +90,7 @@ change that would, up says so and leaves it for ` + "`devbox apply`.",
 			if created {
 				fmt.Printf("\nThe box is booting. Provisioning takes a few minutes. First login, which creates your account:\n")
 				fmt.Printf("  gcloud compute ssh %s --project %s --zone %s --tunnel-through-iap\n", b.C.Name, b.C.ProjectID, b.C.Zone)
-				fmt.Printf("Watch it with:\n  gcloud compute ssh %s --project %s --zone %s --tunnel-through-iap -- sudo journalctl -fu devbox-provision\n", b.C.Name, b.C.ProjectID, b.C.Zone)
+				fmt.Printf("Watch it with:\n  gcloud compute ssh %s --project %s --zone %s --tunnel-through-iap -- tail -f /var/log/devbox-provision.log\n", b.C.Name, b.C.ProjectID, b.C.Zone)
 			} else if p.NeedsReprovision {
 				fmt.Println("\nMetadata changed: run `devbox reprovision` to apply it on the box.")
 			}
@@ -254,15 +255,37 @@ func onBox(name string) bool {
 	return short == name
 }
 
+// reprovisionScript restarts the provision unit, which fetches provision.sh from
+// metadata, and shows this run's part of the log. Restarting it is the one sudo
+// rule the box has besides enrolment; it runs only what metadata holds.
+//
+// sudo runs with no terminal: setsid drops the controlling one, and no standard
+// stream is a tty. Ubuntu sets use_pty, so sudo given a terminal puts it in raw
+// mode for the command's lifetime, and the tail's lines, which go straight to
+// that terminal, then lose their carriage returns and staircase across it.
+const reprovisionScript = `log=/var/log/devbox-provision.log
+start=$(( $(stat -c %s "$log" 2>/dev/null || echo 0) + 1 ))
+tail -c "+$start" -F "$log" 2>/dev/null & t=$!
+out=$(setsid -w sudo -n systemctl restart devbox-provision.service </dev/null 2>&1); rc=$?
+sleep 1; kill "$t" 2>/dev/null
+[ -z "$out" ] || printf '%s\n' "$out" >&2
+exit "$rc"`
+
 func reprovisionCmd(g *globals) *cobra.Command {
 	var rf remoteFlags
 	cmd := &cobra.Command{
 		Use:   "reprovision",
 		Short: "Push provision.sh from the repo and run it",
-		Long: `Updates the instance metadata from devbox.yaml, pushes the provision.sh embedded in
-this binary to /srv/code/.devbox/provision.sh over SSH, and runs it. No
+		Long: `Writes the provision.sh embedded in this binary, and the config from
+devbox.yaml, to the instance metadata, then has the box re-run it as root. No
 replacement, no lost session. Use it after editing provision.sh or any
-reprovision-tier key (see docs/config.md).`,
+reprovision-tier key (see docs/config.md).
+
+Runs anywhere: on the laptop it reaches the box over Tailscale SSH (or --iap);
+on the box it runs locally. Either way it logs in as you. Root on the box only
+ever runs what metadata holds, so the Google credentials here must be able to
+set the instance's metadata. On the box, that means your own
+` + "`gcloud auth application-default login`" + `: the box's service account cannot.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
@@ -272,6 +295,9 @@ reprovision-tier key (see docs/config.md).`,
 				return err
 			}
 			in, err := b.SyncProvisionMetadata(ctx)
+			if gcp.Code(err) == 403 {
+				return fmt.Errorf("%w\nthese Google credentials cannot update the instance's metadata. On the box without your own `gcloud auth application-default login`, they are the box's service account, which by design cannot", err)
+			}
 			if err != nil {
 				return err
 			}
@@ -289,9 +315,7 @@ reprovision-tier key (see docs/config.md).`,
 				via = "IAP"
 			}
 			fmt.Printf("reprovisioning %s via %s ...\n", b.C.Name, via)
-			const script = "set -e; f=/srv/code/.devbox/provision.sh; " +
-				"sudo sh -c \"cat > $f.new && chmod 0755 $f.new && mv $f.new $f\"; sudo $f"
-			return t.Run(ctx, script, stringsReader(assets.Provision()))
+			return t.Run(ctx, reprovisionScript, nil)
 		},
 	}
 	rf.add(cmd)

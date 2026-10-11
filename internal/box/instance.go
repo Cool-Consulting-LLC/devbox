@@ -3,7 +3,6 @@ package box
 import (
 	"context"
 	"fmt"
-	"maps"
 	"strings"
 	"time"
 
@@ -23,10 +22,15 @@ const (
 	mdProvision = "devbox-provision"
 )
 
+// GetInstance returns the box's instance, nil if there is none, or the instance
+// with an ErrNotOurs error if one by that name exists without this box's label.
 func (b *Box) GetInstance(ctx context.Context) (*compute.Instance, error) {
 	in, err := b.G.Compute.Instances.Get(b.C.ProjectID, b.C.Zone, b.C.Name).Context(ctx).Do()
 	if gcp.IsNotFound(err) {
 		return nil, nil
+	}
+	if err == nil && !b.ownsLabels(in.Labels) {
+		return in, b.notOurs("instance", b.C.Name, b.labelFix("instances", b.C.Name+" --zone "+b.C.Zone))
 	}
 	return in, err
 }
@@ -179,10 +183,6 @@ func (b *Box) planInstance(ctx context.Context, p *Plan, mode Mode) error {
 			changes = append(changes, Op{Resource: res, Action: "update", Detail: "attach " + b.C.CodeDiskName(), Run: b.attachCodeDisk})
 		}
 	}
-	if !labelsMatch(in.Labels, b.C.Labels()) {
-		changes = append(changes, Op{Resource: res, Action: "update", Detail: "labels", Run: b.setLabels})
-	}
-
 	// Every change starts from a running instance: never stop or edit a suspended one.
 	switch {
 	case suspended(in.Status) && (len(changes) > 0 || mode == ModeUp):
@@ -203,15 +203,6 @@ func hasScope(s []string) bool {
 		}
 	}
 	return false
-}
-
-func labelsMatch(have, want map[string]string) bool {
-	for k, v := range want {
-		if have[k] != v {
-			return false
-		}
-	}
-	return true
 }
 
 func bootDisk(in *compute.Instance) *compute.AttachedDisk {
@@ -316,20 +307,6 @@ func (b *Box) setMetadata(ctx context.Context) error {
 		md.Items = append(md.Items, &compute.MetadataItems{Key: k, Value: &v})
 	}
 	return b.G.Await(ctx)(b.G.Compute.Instances.SetMetadata(b.C.ProjectID, b.C.Zone, b.C.Name, md).Context(ctx).Do())
-}
-
-func (b *Box) setLabels(ctx context.Context) error {
-	in, err := b.GetInstance(ctx)
-	if err != nil {
-		return err
-	}
-	labels := maps.Clone(in.Labels)
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	maps.Copy(labels, b.C.Labels())
-	return b.G.Await(ctx)(b.G.Compute.Instances.SetLabels(b.C.ProjectID, b.C.Zone, b.C.Name,
-		&compute.InstancesSetLabelsRequest{Labels: labels, LabelFingerprint: in.LabelFingerprint}).Context(ctx).Do())
 }
 
 func (b *Box) setAccessConfig(ctx context.Context) error {

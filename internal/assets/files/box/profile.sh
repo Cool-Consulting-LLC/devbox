@@ -2,11 +2,16 @@
 # /etc/profile.d/devbox.sh, written by provision.sh. Applies to every login.
 export SSH_AUTH_SOCK=/run/devbox/ssh-agent.sock
 
-# sshd's PAM creates a missing home directory at login; Tailscale SSH does not,
-# and logs in with HOME=/. Create it from /etc/skel and move in. Admins only.
+# Nobody has sudo on the box except for devbox-enroll, which sets up an OS
+# Login admin: home directory (sshd's PAM creates it, Tailscale SSH does not,
+# and logs in with HOME=/), linger, and an ACL on /srv/code. Non-admins are
+# refused by it and left alone.
 if [ -n "${USER:-}" ] && [ "$USER" != root ]; then
   __devbox_home=$(getent passwd "$USER" | cut -d: -f6)
-  if [ -n "$__devbox_home" ] && [ ! -d "$__devbox_home" ] && sudo -n /usr/sbin/mkhomedir_helper "$USER" 0077 2>/dev/null; then
+  if [ -d /srv/code/.devbox ] && { [ ! -e "/srv/code/.devbox/enrolled/$(id -u)" ] || { [ -n "$__devbox_home" ] && [ ! -d "$__devbox_home" ]; }; }; then
+    sudo -n /usr/local/sbin/devbox-enroll >/dev/null 2>&1 || true
+  fi
+  if [ -n "$__devbox_home" ] && [ -d "$__devbox_home" ] && [ "$HOME" != "$__devbox_home" ]; then
     HOME=$__devbox_home
     export HOME
     cd "$HOME" || true
@@ -15,12 +20,6 @@ if [ -n "${USER:-}" ] && [ "$USER" != root ]; then
 fi
 
 # Anything that must survive a replacement lives on /srv/code and is linked in.
-# OS Login grants sudo per user, not by group, so admins get /srv/code through an
-# ACL that devbox-enroll sets once. Non-admins have no sudo, and are left alone.
-if [ -n "${USER:-}" ] && [ "$USER" != root ] && [ -d /srv/code/.devbox ] && [ ! -e "/srv/code/.devbox/enrolled/$(id -u)" ]; then
-  sudo -n /usr/local/sbin/devbox-enroll >/dev/null 2>&1 || true
-fi
-
 if [ -n "${USER:-}" ] && [ "$USER" != root ] && [ -w /srv/code ]; then
   __devbox_persist() { # persist <path in home> <path on the pet disk>
     [ -L "$1" ] && return 0

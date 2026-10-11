@@ -10,9 +10,9 @@ What does each value in `devbox.yaml` do? One row per key. Absent keys take the 
 | `create_project` | bool | `false` | refused | Create the project, VPC and subnet. Backlogged: true is refused today. |
 | `zone` | string | `europe-west4-a` | identity | Compute zone. The region is derived from it and must match the subnet's region. |
 | `name` | string | `devbox` | identity | Box name. Every resource is named after it (NAME-code, NAME-allow-iap-ssh, ...) and labelled devbox=NAME. Also the Tailscale hostname and the service account ID. 6-30 chars, lowercase, digits, hyphens. |
-| `network.name` | string | `default` | replace | An existing VPC network in the project. Never created or deleted. |
-| `network.subnet` | string | `default` | replace | An existing subnet of that network, in the zone's region. |
-| `machine_type` | string | `e2-standard-2` | restart | Compute machine type. Must be suspend-capable; E2 is the only family that reports guest memory without an agent. |
+| `network.name` | string | *(required)* | replace | An existing VPC network in the project. Never created or deleted. Required: GCP's network called default usually allows SSH from anywhere, so prefer a dedicated one (README.md, How to set it up, step 2). preflight lists rules that would expose the box. |
+| `network.subnet` | string | *(required)* | replace | An existing subnet of that network, in the zone's region. Required. |
+| `machine_type` | string | `e2-standard-4` | restart | Compute machine type. Must be suspend-capable; E2 is the only family that reports guest memory without an agent. |
 | `external_ip` | bool | `true` | in-place | Give the instance an ephemeral external IP for egress. Set false only if the subnet has Cloud NAT and Private Google Access. |
 | `code_disk_gb` | integer | `50` | reprovision | Size of the /srv/code pet disk. Grow only; shrinking is refused. |
 | `boot_disk_gb` | integer | `30` | reprovision | Size of the boot disk. Grow only; shrinking is refused. |
@@ -20,8 +20,8 @@ What does each value in `devbox.yaml` do? One row per key. Absent keys take the 
 | `git.name` | string | *(required)* | reprovision | user.name in the rendered /etc/gitconfig. |
 | `git.email` | string | *(required)* | reprovision | user.email in /etc/gitconfig and /etc/devbox/allowed_signers. |
 | `tailscale.tag` | string | `tag:devbox` | reprovision | ACL tag the node advertises. Must be owned by the OAuth client. |
-| `tailscale.oauth_secret` | string | `devbox-tailscale-oauth` | reprovision | Secret Manager secret holding the Tailscale OAuth client secret. Must start with devbox-. |
-| `ssh_key.secret` | string | `devbox-ssh-key` | reprovision | Secret Manager secret holding the machine ed25519 private key, loaded into the system ssh-agent at boot. Must start with devbox-. |
+| `tailscale.oauth_secret` | string | `devbox-tailscale-oauth` | reprovision | Secret Manager secret holding the Tailscale OAuth client secret. The box is granted read access on this secret only. |
+| `ssh_key.secret` | string | `devbox-ssh-key` | reprovision | Secret Manager secret holding the machine ed25519 private key, loaded into the system ssh-agent at boot. The box is granted read access on this secret only. |
 | `snapshots.start_time` | string | `03:00` | in-place | Daily snapshot time of the code disk, UTC, on the hour (HH:00). |
 | `snapshots.retention_days` | integer | `14` | in-place | Days each snapshot is kept. Snapshots outlive the disk. |
 | `alerts.email` | string | *(empty)* | in-place | Address of the email notification channel. Empty disables all alerting resources. |

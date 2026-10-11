@@ -6,9 +6,15 @@
 # `make setup` copies it here.
 /devbox.yaml
 
-# The machine key, if docs/01-first-run.md step 4 is interrupted before the
-# private half is shredded. It must never be committed.
+# The machine key, if README.md step 4 is interrupted before the local copy is
+# deleted. It must never be committed.
 devbox_ed25519
 devbox_ed25519.pub
+
+# What `devbox project add` writes into a clone, this one included when it is
+# checked out on a box: per-machine environment and agent settings.
+.devbox-env
+.env
+.claude/settings.local.json
 
 .DS_Store

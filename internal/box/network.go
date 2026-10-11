@@ -82,15 +82,25 @@ func allowedString(a []*compute.FirewallAllowed) string {
 	return strings.Join(s, " ")
 }
 
+// getFirewall returns the rule, nil if absent, or the rule with ErrNotOurs if it
+// lacks the description this binary writes. Firewall rules take no labels.
+func (b *Box) getFirewall(ctx context.Context, name string) (*compute.Firewall, error) {
+	fw, err := b.G.Compute.Firewalls.Get(b.C.ProjectID, name).Context(ctx).Do()
+	if gcp.IsNotFound(err) {
+		return nil, nil
+	}
+	if err == nil && !strings.HasPrefix(fw.Description, b.managedDesc()) {
+		return fw, b.notOurs("firewall rule", name, "delete it if it is a leftover")
+	}
+	return fw, err
+}
+
 func (b *Box) planFirewalls(ctx context.Context, p *Plan) error {
 	want := b.desiredFirewalls()
 	for _, name := range []string{b.C.FirewallIAPName(), b.C.FirewallGlassName()} {
-		have, err := b.G.Compute.Firewalls.Get(b.C.ProjectID, name).Context(ctx).Do()
-		if err != nil && !gcp.IsNotFound(err) {
-			return fmt.Errorf("firewall %s: %w", name, err)
-		}
+		have, err := b.getFirewall(ctx, name)
 		if err != nil {
-			have = nil
+			return fmt.Errorf("firewall %s: %w", name, err)
 		}
 		w := want[name]
 		res := "firewall " + name

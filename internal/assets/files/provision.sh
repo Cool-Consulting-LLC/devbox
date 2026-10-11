@@ -1,7 +1,8 @@
 #!/bin/bash
 # provision.sh: reprovision tier. Idempotent; safe to run any number of times.
-# The canonical copy is in the devbox repo and embedded in the binary. The copy at
-# /srv/code/.devbox/provision.sh is a cache. Push changes with `devbox reprovision`.
+# The canonical copy is in the devbox repo and embedded in the binary; it runs
+# as /usr/local/sbin/devbox-provision, fetched from metadata at every boot.
+# Push changes with `devbox reprovision`.
 set -euo pipefail
 exec > >(tee -a /var/log/devbox-provision.log) 2>&1
 echo "=== provision $(date -Is)"
@@ -30,65 +31,143 @@ root_dev=$(findmnt -no SOURCE /)
 growpart "/dev/$(lsblk -no PKNAME "$root_dev")" "${root_dev##*[!0-9]}" >/dev/null 2>&1 && resize2fs "$root_dev" >/dev/null || true
 
 step layout
-install -d -m 2775 -g google-sudoers /srv/code/.home /srv/code/.gcloud /srv/code/_out
-install -d -m 2775 -g google-sudoers /srv/code/.gcloud/default
+# Enrolled users can write /srv/code, and root reads and writes .devbox (host
+# keys, Tailscale state, enrolment markers). The sticky bit stops a user
+# renaming a root-owned entry away and putting their own in its place; mode 770
+# keeps everyone who is not enrolled out. Root runs no script from this disk.
+chgrp google-sudoers /srv/code
+chmod 3770 /srv/code
+if [ -L /srv/code/.devbox ] || [ ! -d /srv/code/.devbox ] || [ "$(stat -c %u /srv/code/.devbox)" != 0 ]; then
+  echo "/srv/code/.devbox is not a root-owned directory; refusing to trust it" >&2; exit 1
+fi
+chmod 0755 /srv/code/.devbox
+# Copies that root used to run from here. Nothing reads them now.
+rm -f /srv/code/.devbox/provision.sh /srv/code/.devbox/idle-check.sh
+# shared_dir DIR MODE: create DIR, or fix its mode, refusing a symlink a user
+# could point at /etc for root to chmod.
+shared_dir() {
+  if [ -L "$1" ]; then echo "$1 is a symlink; refusing" >&2; exit 1; fi
+  install -d -m "$2" -g google-sudoers "$1"
+}
+shared_dir /srv/code/.home 3775
+shared_dir /srv/code/.gcloud 3775
+shared_dir /srv/code/_out 3775
+shared_dir /srv/code/.gcloud/default 2775
 
-# OS Login grants sudo by writing /var/google-sudoers.d/<user> during an sshd
-# login. Tailscale SSH never reaches that, so a replaced box would leave its
-# owner without sudo. Grant the same thing here, for every user enrolled on this
-# disk whom OS Login says holds adminLogin right now, and create their homes.
-step admins
-oslogin() { curl -fsS -H 'Metadata-Flavor: Google' "$MD/oslogin/$1"; }
+# Nobody on the box has general sudo. Agents run as you, so whatever you can
+# sudo, they can. OS Login still writes NOPASSWD grants for admins into
+# /var/google-sudoers.d, included from /etc/sudoers.d/google-oslogin; this file
+# sorts after it, and in sudoers the last matching rule wins. Two commands are
+# left, both safe for anyone: devbox-enroll, which checks OS Login itself and
+# acts only on its caller, and re-running this script, which the unit fetches
+# from instance metadata. Only the GCP API can change that, so changing what
+# root runs needs IAM permission on the project, not a shell on the box.
+step sudo
+rm -f /etc/sudoers.d/devbox-admins   # the NOPASSWD grants earlier versions wrote
 sudoers=$(mktemp)
+cat > "$sudoers" <<'EOF'
+# Written by provision.sh. No general sudo for anyone but root: see README.md, Security.
+ALL, !root ALL=(ALL:ALL) !ALL
+ALL ALL=(root) NOPASSWD: /usr/local/sbin/devbox-enroll "", /usr/bin/systemctl restart devbox-provision.service
+EOF
+visudo -cqf "$sudoers" || { echo "sudoers file does not parse; refusing" >&2; exit 1; }
+install -m 0440 "$sudoers" /etc/sudoers.d/zz-devbox
+rm -f "$sudoers"
+if grep -qs '^[#@]includedir /var/google-sudoers.d' /etc/sudoers; then
+  echo "WARNING: /etc/sudoers includes OS Login's grants after /etc/sudoers.d; admins may still have sudo" >&2
+fi
+
+# Revisit everyone enrolled on this disk. Admins keep a home and linger;
+# anyone OS Login says is no longer an admin, or no longer exists, loses
+# /srv/code. An unreachable metadata server changes nothing.
+step admins
+# oslogin PATH: print the body and the HTTP status on the last line.
+oslogin() { curl -sS -H 'Metadata-Flavor: Google' -w '\n%{http_code}' "$MD/oslogin/$1" || echo 000; }
+# admin_state UID: yes, no or unknown, then the POSIX name on yes.
+admin_state() {
+  local r code profile email
+  r=$(oslogin "users?uid=$1"); code=${r##*$'\n'}; profile=${r%$'\n'*}
+  case $code in 200) ;; 404) echo no; return ;; *) echo unknown; return ;; esac
+  email=$(jq -r '.loginProfiles[0].name | @uri' <<<"$profile")
+  r=$(oslogin "authorize?email=$email&policy=adminLogin"); code=${r##*$'\n'}
+  case $code in
+    200) jq -e .success <<<"${r%$'\n'*}" >/dev/null 2>&1 || { echo no; return; } ;;
+    403|404) echo no; return ;;
+    *) echo unknown; return ;;
+  esac
+  echo yes
+  jq -r --arg uid "$1" '.loginProfiles[0].posixAccounts[] | select(.uid == $uid) | .username' <<<"$profile" | head -n1
+}
+revoke() {
+  find /srv/code -maxdepth 1 ! -name .devbox ! -name lost+found ! -type l \
+    -exec setfacl -R -P -x "u:$1" -x "d:u:$1" {} + 2>/dev/null || true
+  rm -f "/srv/code/.devbox/enrolled/$1"
+  echo "revoked uid $1: no longer an OS Login admin"
+}
 for m in /srv/code/.devbox/enrolled/*; do
   [ -e "$m" ] || continue
   uid=$(basename "$m")
   [[ $uid =~ ^[0-9]+$ ]] || { rm -f "$m"; continue; }   # name-keyed markers predate uids
-  profile=$(oslogin "users?uid=$uid") || continue
-  user=$(jq -r --arg uid "$uid" '.loginProfiles[0].posixAccounts[] | select(.uid == $uid) | .username' <<<"$profile" | head -n1)
-  email=$(jq -r '.loginProfiles[0].name' <<<"$profile")
+  { read -r state; read -r user; } < <(admin_state "$uid"; echo)
+  case $state in
+    no) revoke "$uid"; continue ;;
+    yes) ;;
+    *) continue ;;
+  esac
   [ -n "$user" ] || continue
-  if oslogin "authorize?email=$email&policy=adminLogin" | jq -e .success >/dev/null 2>&1; then
-    echo "$user ALL=(ALL:ALL) NOPASSWD: ALL" >> "$sudoers"
-  fi
   home=$(getent passwd "$uid" | cut -d: -f6) || true
   if [ -n "$home" ] && [ ! -d "$home" ]; then mkhomedir_helper "$user" 0077; fi
   loginctl enable-linger "$user" || true   # see devbox-enroll: tmux must outlive sessions
+  operator=${operator:-$user}
+  # The check above is about file order; this one is about the outcome.
+  if runuser -u "$user" -- sudo -n true 2>/dev/null; then
+    echo "WARNING: $user can still sudo; agents running as $user can too" >&2
+  fi
 done
-if visudo -cqf "$sudoers"; then install -m 0440 "$sudoers" /etc/sudoers.d/devbox-admins; fi
-rm -f "$sudoers"
 
 step packages
 apt_get() { for i in 1 2 3; do apt-get "$@" && return 0; sleep $((i * 10)); done; return 1; }
 need_update=0
+install -d -m 0755 /etc/apt/keyrings
+. /etc/os-release
 
-if [ ! -f /etc/apt/sources.list.d/claude-code.list ]; then
-  install -d -m 0755 /etc/apt/keyrings
-  curl -fsSL https://downloads.claude.ai/keys/claude-code.asc -o /etc/apt/keyrings/claude-code.asc.new
-  if ! gpg --show-keys /etc/apt/keyrings/claude-code.asc.new | grep -q 31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE; then
-    echo "claude-code signing key fingerprint mismatch; refusing" >&2; exit 1
-  fi
-  mv /etc/apt/keyrings/claude-code.asc.new /etc/apt/keyrings/claude-code.asc
-  echo "deb [signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/stable stable main" \
-    > /etc/apt/sources.list.d/claude-code.list
+# apt_repo NAME KEY_URL KEY_FILE SOURCE FINGERPRINT...: add a third-party apt
+# repository whose signing key holds exactly the expected primary keys. TLS alone
+# trusts whoever answers, and one extra key in the file would let its holder
+# sign packages, so every primary key must be on the list, not just one.
+apt_repo() {
+  local name=$1 url=$2 keyfile=$3 source=$4 tmp got f; shift 4
+  [ -f "/etc/apt/sources.list.d/$name.list" ] && return 0
+  tmp=$(mktemp)
+  curl -fsSL "$url" -o "$tmp"
+  got=$(gpg --show-keys --with-colons "$tmp" 2>/dev/null | awk -F: '$1=="pub"{p=1} $1=="fpr"&&p{print $10; p=0}')
+  [ -n "$got" ] || { echo "$name: no key in $url; refusing" >&2; exit 1; }
+  for f in $got; do
+    case " $* " in *" $f "*) ;; *) echo "$name: unexpected signing key $f in $url; refusing" >&2; exit 1 ;; esac
+  done
+  install -m 0644 "$tmp" "$keyfile"
+  rm -f "$tmp"
+  echo "deb [signed-by=$keyfile] $source" > "/etc/apt/sources.list.d/$name.list"
   need_update=1
-fi
-
-if [ ! -f /etc/apt/sources.list.d/tailscale.list ]; then
-  . /etc/os-release
-  curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/${VERSION_CODENAME}.noarmor.gpg" \
-    -o /usr/share/keyrings/tailscale-archive-keyring.gpg
-  curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/${VERSION_CODENAME}.tailscale-keyring.list" \
-    -o /etc/apt/sources.list.d/tailscale.list
-  need_update=1
-fi
+}
+apt_repo claude-code https://downloads.claude.ai/keys/claude-code.asc /etc/apt/keyrings/claude-code.asc \
+  "https://downloads.claude.ai/claude-code/apt/stable stable main" \
+  31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE
+apt_repo tailscale "https://pkgs.tailscale.com/stable/ubuntu/${VERSION_CODENAME}.noarmor.gpg" \
+  /usr/share/keyrings/tailscale-archive-keyring.gpg \
+  "https://pkgs.tailscale.com/stable/ubuntu ${VERSION_CODENAME} main" \
+  2596A99EAAB33821893C0A79458CA832957F5868
+apt_repo github-cli https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  "https://cli.github.com/packages stable main" \
+  2C6106201985B60E6C7AC87323F3D4EA75716059 7F38BBB59D064DBCB3D84D725612B36462313325
 
 # Refresh at most daily otherwise, so a reprovision stays quick.
 if [ "$need_update" = 1 ] || [ -z "$(find /var/lib/apt/lists -maxdepth 0 -mmin -1440 2>/dev/null)" ]; then
   apt_get update -q
 fi
 # shellcheck disable=SC2086
-apt_get install -y -q acl claude-code golang-go tailscale $DEVBOX_EXTRA_PACKAGES
+apt_get install -y -q acl claude-code gh golang-go nodejs npm tailscale $DEVBOX_EXTRA_PACKAGES
 
 step ssh-agent
 export SSH_AUTH_SOCK=/run/devbox-agent/agent.sock
@@ -102,23 +181,19 @@ systemctl restart devbox-ssh-agent-relay.service
 step git
 install -d -m 0755 /etc/devbox
 printf '%s namespaces="git" %s\n' "$DEVBOX_GIT_EMAIL" "$pubkey" > /etc/devbox/allowed_signers
-cat > /etc/gitconfig <<EOF
-# Written by provision.sh from devbox.yaml. ~/.gitconfig still overrides.
-[user]
-	name = $DEVBOX_GIT_NAME
-	email = $DEVBOX_GIT_EMAIL
-	signingkey = key::$pubkey
-[gpg]
-	format = ssh
-[commit]
-	gpgsign = true
-[tag]
-	forceSignAnnotated = true
-[gpg "ssh"]
-	allowedSignersFile = /etc/devbox/allowed_signers
-[init]
-	defaultBranch = main
-EOF
+# Through git config, not a heredoc: git quotes the values, so nothing in
+# devbox.yaml can add a line of its own to a file every git command reads.
+gc=/etc/gitconfig.devbox-new
+echo "# Written by provision.sh from devbox.yaml. ~/.gitconfig still overrides." > "$gc"
+git config --file "$gc" user.name "$DEVBOX_GIT_NAME"
+git config --file "$gc" user.email "$DEVBOX_GIT_EMAIL"
+git config --file "$gc" user.signingkey "key::$pubkey"
+git config --file "$gc" gpg.format ssh
+git config --file "$gc" commit.gpgsign true
+git config --file "$gc" tag.forceSignAnnotated true
+git config --file "$gc" gpg.ssh.allowedSignersFile /etc/devbox/allowed_signers
+git config --file "$gc" init.defaultBranch main
+chmod 0644 "$gc" && mv "$gc" /etc/gitconfig
 # Pin GitHub's host keys from its TLS-authenticated API, not from first contact.
 gh_keys=$(curl -fsS https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com " + .') || gh_keys=""
 if [ -n "$gh_keys" ]; then
@@ -177,6 +252,9 @@ if [ "$state" != Running ]; then
 else
   tailscale set --hostname="$DEVBOX_NAME" --accept-dns=false --ssh
 fi
+# The operator runs `tailscale serve` and `tailscale drive share` without root.
+# Tailscale allows one; on a one-person box, the first admin enrolled is it.
+if [ -n "${operator:-}" ]; then tailscale set --operator="$operator"; fi
 
 step motd
 # Quiet logins: no Ubuntu banner, legal notice, news or update nags. The

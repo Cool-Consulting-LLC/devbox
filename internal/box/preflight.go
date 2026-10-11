@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/netip"
 	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	crm "google.golang.org/api/cloudresourcemanager/v1"
+	compute "google.golang.org/api/compute/v1"
 	serviceusage "google.golang.org/api/serviceusage/v1"
 
 	"github.com/Cool-Consulting-LLC/devbox/internal/gcp"
@@ -56,6 +58,7 @@ type check struct{ name, value, status, hint string }
 // PreflightResult carries what later commands need from preflight.
 type PreflightResult struct {
 	OK        bool
+	Email     string
 	PosixUser string
 }
 
@@ -87,6 +90,7 @@ func (b *Box) Preflight(ctx context.Context, fix bool, w io.Writer) (*PreflightR
 		add(check{"identity", "", stFail, err.Error()})
 		return res, nil
 	}
+	res.Email = email
 
 	// Permissions: test the real thing, and show the roles for orientation.
 	tp, err := b.G.CRM.Projects.TestIamPermissions(b.C.ProjectID, &crm.TestIamPermissionsRequest{
@@ -131,10 +135,11 @@ func (b *Box) Preflight(ctx context.Context, fix bool, w io.Writer) (*PreflightR
 	if slices.Contains(tp.Permissions, osAdminPermission) {
 		add(check{"os admin login", "roles/compute.osAdminLogin", stOK, ""})
 	} else {
-		add(check{"os admin login", "", stFail, "grant yourself roles/compute.osAdminLogin, or you will log in without sudo"})
+		add(check{"os admin login", "", stFail, "grant yourself roles/compute.osAdminLogin: only admins get /srv/code and the machine key"})
 	}
 
 	b.checkNetwork(ctx, add)
+	b.checkExposure(ctx, add)
 	b.checkOrgPolicies(ctx, add)
 	b.checkMachine(ctx, add)
 
@@ -266,6 +271,63 @@ func (b *Box) checkNetwork(ctx context.Context, add func(check)) {
 	} else {
 		add(check{"egress", "no external IP, NAT on router " + nat, stWarn, "a NAT exists; confirm it covers subnet " + b.C.Network.Subnet + ", which no API can answer for every config"})
 	}
+}
+
+// checkExposure looks for firewall rules this binary did not create that let
+// traffic reach the box. GCP's network called default ships default-allow-ssh
+// from 0.0.0.0/0, which with an external IP puts sshd on the internet.
+func (b *Box) checkExposure(ctx context.Context, add func(check)) {
+	var rules []*compute.Firewall
+	err := b.G.Compute.Firewalls.List(b.C.ProjectID).Pages(ctx, func(l *compute.FirewallList) error {
+		rules = append(rules, l.Items...)
+		return nil
+	})
+	if err != nil {
+		add(check{"exposure", "", stWarn, "cannot list firewall rules: " + short(err)})
+		return
+	}
+	own := b.desiredFirewalls()
+	internet, internal := exposingRules(rules, b.C.Network.Name, b.C.SAEmail(), func(n string) bool { return own[n] != nil })
+	switch {
+	case len(internet) > 0 && b.C.WantExternalIP():
+		add(check{"exposure", strings.Join(internet, ", "), stFail, "these rules open the box to the internet. Delete them, scope them with target tags, or use a dedicated network (README.md, step 2)"})
+	case len(internet) > 0:
+		add(check{"exposure", strings.Join(internet, ", "), stWarn, "these rules allow traffic from the internet; harmless without an external IP, but they apply the moment one is added"})
+	}
+	if len(internal) > 0 {
+		add(check{"exposure", strings.Join(internal, ", "), stWarn, "other machines in network " + b.C.Network.Name + " can reach the box through these rules"})
+	}
+	if len(internet) == 0 && len(internal) == 0 {
+		add(check{"exposure", "only devbox's own rules", stOK, ""})
+	}
+}
+
+// exposingRules names the enabled ingress allow rules on network that apply to
+// a VM with service account sa and no network tags, split by whether any
+// source is a public address range. own reports the binary's own rules.
+func exposingRules(rules []*compute.Firewall, network, sa string, own func(string) bool) (internet, internal []string) {
+	for _, r := range rules {
+		if own(r.Name) || r.Disabled || r.Direction != "INGRESS" || len(r.Allowed) == 0 || gcp.Last(r.Network) != network {
+			continue
+		}
+		// The box carries no network tags, so a tag-targeted rule never reaches it.
+		if len(r.TargetTags) > 0 || (len(r.TargetServiceAccounts) > 0 && !slices.Contains(r.TargetServiceAccounts, sa)) {
+			continue
+		}
+		public := false
+		for _, src := range r.SourceRanges {
+			if p, err := netip.ParsePrefix(src); err == nil && src != iapRange && !p.Addr().IsPrivate() && !p.Addr().IsLoopback() {
+				public = true
+			}
+		}
+		desc := r.Name + " (" + allowedString(r.Allowed) + " from " + strings.Join(append(slices.Clone(r.SourceRanges), r.SourceTags...), ",") + ")"
+		if public {
+			internet = append(internet, desc)
+		} else {
+			internal = append(internal, desc)
+		}
+	}
+	return internet, internal
 }
 
 func (b *Box) checkOrgPolicies(ctx context.Context, add func(check)) {

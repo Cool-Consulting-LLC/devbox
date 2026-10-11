@@ -30,6 +30,7 @@ const fakeProjectNumber = 123456789
 type fakeSecret struct {
 	s        *secretmanager.Secret
 	versions []*secretmanager.SecretVersion
+	policy   *secretmanager.Policy
 }
 
 type fakeGCP struct {
@@ -591,6 +592,26 @@ func (f *fakeGCP) secretmanager(r *http.Request, p string, body []byte) (any, er
 	}
 	if len(parts) == 4 {
 		switch {
+		case verb == "getIamPolicy":
+			if s.policy == nil {
+				return &secretmanager.Policy{Etag: "s0"}, nil
+			}
+			return s.policy, nil
+		case verb == "setIamPolicy":
+			pol := decode[secretmanager.SetIamPolicyRequest](f.t, body).Policy
+			if s.policy != nil && pol.Etag != s.policy.Etag {
+				return nil, errf(409, "etag mismatch")
+			}
+			for _, b := range pol.Bindings {
+				for _, m := range b.Members {
+					if email, ok := strings.CutPrefix(m, "serviceAccount:"); ok && f.sas[email] == nil {
+						return nil, errf(400, "Service account %s does not exist", email)
+					}
+				}
+			}
+			pol.Etag = f.newFP()
+			s.policy = pol
+			return pol, nil
 		case verb == "addVersion":
 			v := &secretmanager.SecretVersion{Name: fmt.Sprintf("%s/versions/%d", s.s.Name, len(s.versions)+1), State: "ENABLED",
 				CreateTime: fmt.Sprintf("2026-02-%02dT00:00:00Z", len(s.versions)+1)}

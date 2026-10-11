@@ -2,6 +2,7 @@ package box
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"text/tabwriter"
@@ -10,6 +11,7 @@ import (
 )
 
 // Monthly on-demand compute for e2-standard-2, from the plan. Verify before trusting.
+// Other e2-standard sizes scale linearly: e2-standard-N costs N/2 times this.
 var computeMonthly = map[string]float64{
 	"europe-west3":    63.03,
 	"europe-central2": 59.19,
@@ -20,8 +22,16 @@ const (
 	diskPerGBMonth         = 0.12 // pd-balanced, approximate
 	ipMonthly              = 3.65 // ephemeral IPv4 while running
 	suspendedRAMPerGBMonth = 0.000233 * 730
-	e2Standard2RAMGiB      = 8
 )
+
+// e2StandardVCPUs returns N for e2-standard-N, which has 4N GiB of memory.
+func e2StandardVCPUs(machineType string) (int, bool) {
+	var n int
+	if _, err := fmt.Sscanf(machineType, "e2-standard-%d", &n); err != nil || machineType != fmt.Sprintf("e2-standard-%d", n) {
+		return 0, false
+	}
+	return n, true
+}
 
 // Status prints what exists, its state and what it costs.
 func (b *Box) Status(ctx context.Context, w io.Writer) error {
@@ -37,7 +47,10 @@ func (b *Box) Status(ctx context.Context, w io.Writer) error {
 	}
 
 	in, err := b.GetInstance(ctx)
-	if err != nil {
+	if errors.Is(err, ErrNotOurs) {
+		row("instance", b.C.Name, "NOT DEVBOX'S", "a VM by this name exists without the devbox="+b.C.Name+" label")
+		in = nil
+	} else if err != nil {
 		return err
 	}
 	state, ip := "absent", ""
@@ -51,16 +64,18 @@ func (b *Box) Status(ctx context.Context, w io.Writer) error {
 			bootGB = bd.DiskSizeGb
 		}
 		row("instance", b.C.Name, state, gcp.Last(in.MachineType)+" "+ip)
-	} else {
+	} else if err == nil {
 		row("instance", b.C.Name, state)
 	}
 
 	disk, err := b.getCodeDisk(ctx)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrNotOurs) {
 		return err
 	}
 	var codeGB int64
-	if disk != nil {
+	if errors.Is(err, ErrNotOurs) {
+		row("code disk", disk.Name, "NOT DEVBOX'S", "no devbox="+b.C.Name+" label")
+	} else if disk != nil {
 		codeGB = disk.SizeGb
 		row("code disk", disk.Name, disk.Status, fmt.Sprintf("%d GB", disk.SizeGb))
 	} else {
@@ -77,7 +92,9 @@ func (b *Box) Status(ctx context.Context, w io.Writer) error {
 		}
 	}
 	row("snapshots", fmt.Sprintf("%d", len(snaps)), "", latest)
-	if rp, err := b.getSnapshotPolicy(ctx); err != nil {
+	if rp, err := b.getSnapshotPolicy(ctx); errors.Is(err, ErrNotOurs) {
+		row("snapshot schedule", rp.Name, "NOT DEVBOX'S")
+	} else if err != nil {
 		return err
 	} else if rp != nil {
 		row("snapshot schedule", rp.Name, rp.Status)
@@ -86,20 +103,26 @@ func (b *Box) Status(ctx context.Context, w io.Writer) error {
 	}
 
 	sa, err := b.getSA(ctx)
-	if err != nil {
+	if errors.Is(err, ErrNotOurs) {
+		row("service account", b.C.SAEmail(), "NOT DEVBOX'S")
+	} else if err != nil {
 		return err
+	} else {
+		row("service account", b.C.SAEmail(), present(sa != nil))
 	}
-	row("service account", b.C.SAEmail(), present(sa != nil))
 	for _, name := range []string{b.C.FirewallIAPName(), b.C.FirewallGlassName()} {
-		fw, err := b.G.Compute.Firewalls.Get(b.C.ProjectID, name).Context(ctx).Do()
-		if err != nil && !gcp.IsNotFound(err) {
+		fw, err := b.getFirewall(ctx, name)
+		if errors.Is(err, ErrNotOurs) {
+			row("firewall", name, "NOT DEVBOX'S")
+			continue
+		} else if err != nil {
 			return err
 		}
 		detail := ""
-		if fw != nil && err == nil {
+		if fw != nil {
 			detail = fmt.Sprintf("%s from %v", allowedString(fw.Allowed), fw.SourceRanges)
 		}
-		row("firewall", name, present(err == nil), detail)
+		row("firewall", name, present(fw != nil), detail)
 	}
 	pols, err := b.listPolicies(ctx)
 	if err != nil {
@@ -132,7 +155,9 @@ func present(ok bool) string {
 func (b *Box) printCost(w io.Writer, state string, bootGB, codeGB int64, hasIP bool) {
 	disks := float64(bootGB+codeGB) * diskPerGBMonth
 	compute, known := computeMonthly[b.C.Region()]
-	known = known && b.C.MachineType == "e2-standard-2"
+	vcpus, standard := e2StandardVCPUs(b.C.MachineType)
+	known = known && standard
+	compute *= float64(vcpus) / 2
 	var total float64
 	var what string
 	switch {
@@ -146,7 +171,7 @@ func (b *Box) printCost(w io.Writer, state string, bootGB, codeGB int64, hasIP b
 		}
 		what = "running"
 	case suspended(state):
-		total = disks + suspendedRAMPerGBMonth*e2Standard2RAMGiB
+		total = disks + suspendedRAMPerGBMonth*float64(4*vcpus)
 		what = "suspended"
 	default:
 		total = disks

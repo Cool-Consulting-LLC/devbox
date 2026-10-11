@@ -84,6 +84,10 @@ write_files:
   - path: /etc/systemd/system/devbox-provision.service
     permissions: "0644"
     content: |
+      # Root runs nothing from /srv/code: enrolled users can write there. Every
+      # run takes provision.sh fresh from metadata, which only the GCP API can
+      # change. `devbox reprovision` updates the metadata, then restarts this
+      # unit, through the one sudo rule that allows it.
       [Unit]
       Description=devbox provisioning
       After=google-guest-agent.service network-online.target devbox-ssh-agent-relay.service srv-code.mount
@@ -92,7 +96,10 @@ write_files:
 
       [Service]
       Type=oneshot
-      ExecStart=/srv/code/.devbox/provision.sh
+      ExecStartPre=/usr/bin/curl -fsS -H "Metadata-Flavor: Google" -o /usr/local/sbin/devbox-provision.new http://metadata.google.internal/computeMetadata/v1/instance/attributes/devbox-provision
+      ExecStartPre=/bin/chmod 0755 /usr/local/sbin/devbox-provision.new
+      ExecStartPre=/bin/mv /usr/local/sbin/devbox-provision.new /usr/local/sbin/devbox-provision
+      ExecStart=/usr/local/sbin/devbox-provision
       RemainAfterExit=yes
 
       [Install]
@@ -103,12 +110,12 @@ write_files:
     content: |
       [Unit]
       Description=devbox idle check
-      ConditionPathExists=/srv/code/.devbox/idle-check.sh
+      ConditionPathExists=/usr/local/sbin/devbox-idle-check
 
       [Service]
       Type=oneshot
       EnvironmentFile=-/run/devbox/config.env
-      ExecStart=/bin/sh -c 'exec /srv/code/.devbox/idle-check.sh "$${DEVBOX_IDLE_MINUTES:-60}"'
+      ExecStart=/bin/sh -c 'exec /usr/local/sbin/devbox-idle-check "$${DEVBOX_IDLE_MINUTES:-60}"'
 
   - path: /etc/systemd/system/devbox-idle.timer
     permissions: "0644"

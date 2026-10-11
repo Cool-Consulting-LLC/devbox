@@ -233,3 +233,23 @@ func TestConfigEnvQuotes(t *testing.T) {
 		t.Fatalf("got %q", out)
 	}
 }
+
+// make lint names its files; a new box script must not slip past it.
+func TestMakeLintCoversBoxScripts(t *testing.T) {
+	mk, err := os.ReadFile("../../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range boxFiles {
+		switch filepath.Ext(f.src) {
+		case ".json", ".conf":
+			continue
+		}
+		if strings.HasSuffix(f.src, "/.ssh/config") {
+			continue
+		}
+		if !strings.Contains(string(mk), strings.TrimPrefix(f.src, "box/")) {
+			t.Errorf("%s is not in the Makefile's SCRIPTS or PYTHON", f.src)
+		}
+	}
+}

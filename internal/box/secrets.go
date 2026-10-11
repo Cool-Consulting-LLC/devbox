@@ -42,7 +42,7 @@ func (b *Box) checkSecrets(ctx context.Context, p *Plan) error {
 	return nil
 }
 
-// ListLabelledSecrets returns the devbox-* secrets labelled for this box.
+// ListLabelledSecrets returns the secrets labelled devbox=<name>.
 func (b *Box) ListLabelledSecrets(ctx context.Context) ([]*secretmanager.Secret, error) {
 	var out []*secretmanager.Secret
 	err := b.G.Secrets.Projects.Secrets.List("projects/"+b.C.ProjectID).
@@ -57,15 +57,17 @@ func (b *Box) ListLabelledSecrets(ctx context.Context) ([]*secretmanager.Secret,
 var projectRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// ProjectSecretID is the Secret Manager ID for a project's env var.
-func ProjectSecretID(project, key string) (string, error) {
+// ProjectSecretID is the Secret Manager ID for a project's env var on box name.
+// The box name leads, so two boxes with a project of the same name never share
+// or overwrite each other's secret.
+func ProjectSecretID(name, project, key string) (string, error) {
 	if !projectRe.MatchString(project) {
 		return "", fmt.Errorf("project %q must be the directory name under /srv/code", project)
 	}
 	if !envKeyRe.MatchString(key) {
 		return "", fmt.Errorf("%q is not an environment variable name", key)
 	}
-	id := config.SecretPrefix + project + "-" + key
+	id := name + "-" + project + "-" + key
 	if len(id) > 255 {
 		return "", fmt.Errorf("secret ID %s is too long", id)
 	}
@@ -93,7 +95,12 @@ func (b *Box) PutSecret(ctx context.Context, id, project string, value []byte) (
 	if existed {
 		b.disableOldVersions(ctx, id)
 	}
-	return existed, nil
+	// Without its service account there is nobody to grant yet; `devbox up`
+	// grants every labelled secret when it creates one.
+	if sa, err := b.getSA(ctx); err != nil || sa == nil {
+		return existed, err
+	}
+	return existed, b.grantSecret(ctx, id)
 }
 
 // disableOldVersions leaves only the newest version enabled after a rotation. Best effort.
