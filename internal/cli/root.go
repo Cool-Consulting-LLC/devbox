@@ -47,7 +47,7 @@ tailnet, a pet disk at /srv/code, IAP and break-glass ways in, and alerts.
 Stateless: resources are found by the label devbox=<name> and the prefix <name>-.
 
 Credentials: Application Default Credentials (gcloud auth application-default login).
-Docs: README.md (what it does, how to use it, how to set it up) and docs/config.md.`,
+Docs: README.md (what it is, how to set it up, how to use it) and docs/config.md.`,
 		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,

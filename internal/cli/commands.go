@@ -44,7 +44,7 @@ for each failure. Exits non-zero if anything is FAIL or MISSING.
 				return err
 			}
 			if res.PosixUser != "" {
-				fmt.Printf("\nTailscale SSH rule for this box (README.md, step 3):\n")
+				fmt.Printf("\nTailscale SSH rule for this box (README.md, How to set it up, step 3):\n")
 				fmt.Printf("  { \"action\": \"accept\", \"src\": [%q], \"dst\": [\"tag:devbox\"], \"users\": [%q] }\n", res.Email, res.PosixUser)
 			}
 			if !res.OK {

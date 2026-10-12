@@ -16,7 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Change tiers, as described in README.md, Changing things.
+// Change tiers, as described in docs/config.md.
 const (
 	TierIdentity    = "identity"    // addresses a different box; not a change to this one
 	TierInPlace     = "in-place"    // `apply` updates GCP resources; the box is untouched
