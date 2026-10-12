@@ -28,6 +28,7 @@ A Claude Code workstation in your own GCP project, reachable over your tailnet, 
 - Installed from Anthropic's signed apt repository.
 - Managed settings and a hook deny agents `git commit`, `git push`, `terraform apply/destroy` and `devbox apply/destroy`. This is policy, not a security boundary: see [Security](#security). Branch protection on GitHub is the real backstop.
 - The GitHub CLI (`gh`) is installed from GitHub's signed apt repository. If you `gh auth login` on the box, agents can use that token.
+- Terraform is installed from HashiCorp's signed apt repository. Agents can plan; the hook above keeps applying and destroying for you.
 - A status line in every session: directory and branch, the gcloud identity and project the session was given, whether that identity has Application Default Credentials, how full `/srv/code` is, context and rate-limit meters, session cost, and the model.
 
 **Projects**

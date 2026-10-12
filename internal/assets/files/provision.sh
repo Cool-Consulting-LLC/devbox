@@ -108,7 +108,7 @@ for m in /srv/code/.devbox/enrolled/*; do
   [ -e "$m" ] || continue
   uid=$(basename "$m")
   [[ $uid =~ ^[0-9]+$ ]] || { rm -f "$m"; continue; }   # name-keyed markers predate uids
-  { read -r state; read -r user; } < <(admin_state "$uid"; echo)
+  { read -r state; read -r user || user=; } < <(admin_state "$uid")
   case $state in
     no) revoke "$uid"; continue ;;
     yes) ;;
@@ -161,13 +161,17 @@ apt_repo github-cli https://cli.github.com/packages/githubcli-archive-keyring.gp
   /etc/apt/keyrings/githubcli-archive-keyring.gpg \
   "https://cli.github.com/packages stable main" \
   2C6106201985B60E6C7AC87323F3D4EA75716059 7F38BBB59D064DBCB3D84D725612B36462313325
+apt_repo hashicorp https://apt.releases.hashicorp.com/gpg \
+  /etc/apt/keyrings/hashicorp-archive-keyring.gpg \
+  "https://apt.releases.hashicorp.com ${VERSION_CODENAME} main" \
+  D55C0D1AC78A8D8126CB631CFC9CA96ACA026560
 
 # Refresh at most daily otherwise, so a reprovision stays quick.
 if [ "$need_update" = 1 ] || [ -z "$(find /var/lib/apt/lists -maxdepth 0 -mmin -1440 2>/dev/null)" ]; then
   apt_get update -q
 fi
 # shellcheck disable=SC2086
-apt_get install -y -q acl claude-code gh golang-go nodejs npm tailscale $DEVBOX_EXTRA_PACKAGES
+apt_get install -y -q acl claude-code gh golang-go nodejs npm tailscale terraform $DEVBOX_EXTRA_PACKAGES
 
 step ssh-agent
 export SSH_AUTH_SOCK=/run/devbox-agent/agent.sock
