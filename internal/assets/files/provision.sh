@@ -136,8 +136,15 @@ install -d -m 0755 /etc/apt/keyrings
 # trusts whoever answers, and one extra key in the file would let its holder
 # sign packages, so every primary key must be on the list, not just one.
 apt_repo() {
-  local name=$1 url=$2 keyfile=$3 source=$4 tmp got f; shift 4
-  [ -f "/etc/apt/sources.list.d/$name.list" ] && return 0
+  local name=$1 url=$2 keyfile=$3 source=$4 tmp got f lists line; shift 4
+  line="deb [signed-by=$keyfile] $source"
+  # A changed line (a new key path, say) falls through and is written afresh.
+  if [ "$(cat "/etc/apt/sources.list.d/$name.list" 2>/dev/null)" = "$line" ] && [ -s "$keyfile" ]; then
+    # Added by a run that died before apt-get update: fetch it now, not tomorrow.
+    lists=$(sed -E 's|^[a-z]+://||; s| .*||; s|/+$||; s|/|_|g' <<<"$source")
+    compgen -G "/var/lib/apt/lists/${lists}_*" >/dev/null || need_update=1
+    return 0
+  fi
   tmp=$(mktemp)
   curl -fsSL "$url" -o "$tmp"
   got=$(gpg --show-keys --with-colons "$tmp" 2>/dev/null | awk -F: '$1=="pub"{p=1} $1=="fpr"&&p{print $10; p=0}')
@@ -147,7 +154,7 @@ apt_repo() {
   done
   install -m 0644 "$tmp" "$keyfile"
   rm -f "$tmp"
-  echo "deb [signed-by=$keyfile] $source" > "/etc/apt/sources.list.d/$name.list"
+  echo "$line" > "/etc/apt/sources.list.d/$name.list"
   need_update=1
 }
 apt_repo claude-code https://downloads.claude.ai/keys/claude-code.asc /etc/apt/keyrings/claude-code.asc \
@@ -162,7 +169,7 @@ apt_repo github-cli https://cli.github.com/packages/githubcli-archive-keyring.gp
   "https://cli.github.com/packages stable main" \
   2C6106201985B60E6C7AC87323F3D4EA75716059 7F38BBB59D064DBCB3D84D725612B36462313325
 apt_repo hashicorp https://apt.releases.hashicorp.com/gpg \
-  /etc/apt/keyrings/hashicorp-archive-keyring.gpg \
+  /etc/apt/keyrings/hashicorp-archive-keyring.asc \
   "https://apt.releases.hashicorp.com ${VERSION_CODENAME} main" \
   D55C0D1AC78A8D8126CB631CFC9CA96ACA026560
 
