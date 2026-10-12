@@ -64,7 +64,7 @@ type Git struct {
 
 type Tailscale struct {
 	Tag         string `yaml:"tag" describe:"ACL tag the node advertises. Must be owned by the OAuth client." tier:"reprovision" default:"tag:devbox"`
-	OAuthSecret string `yaml:"oauth_secret" describe:"Secret Manager secret holding the Tailscale OAuth client secret. The box is granted read access on this secret only." tier:"reprovision" default:"devbox-tailscale-oauth"`
+	OAuthSecret string `yaml:"oauth_secret" describe:"Secret Manager secret holding the Tailscale OAuth client secret. The box can read it only for an hour after its code disk is created, or after reprovision --rejoin." tier:"reprovision" default:"devbox-tailscale-oauth"`
 }
 
 type SSHKey struct {
@@ -152,6 +152,12 @@ var (
 	tagRe      = regexp.MustCompile(`^tag:[a-z0-9-]+$`)
 	secretIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,255}$`)
 	pkgRe      = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+(=[A-Za-z0-9.+~:-]+)?$`)
+	// RFC 1035, as GCP requires for networks, subnets and machine types. They
+	// go into API paths, so nothing else gets that far.
+	gceNameRe = regexp.MustCompile(`^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	// No wildcards, commas, quotes or !: git.email is a principal in
+	// allowed_signers, where those make it a pattern or a list.
+	emailRe = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$`)
 )
 
 // Validate returns every problem at once, one per line.
@@ -177,9 +183,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Network.Name == "" || c.Network.Subnet == "" {
 		bad("network.name and network.subnet are both required")
+	} else {
+		for k, v := range map[string]string{"network.name": c.Network.Name, "network.subnet": c.Network.Subnet} {
+			if !gceNameRe.MatchString(v) {
+				bad("%s %q is not a GCP resource name: lowercase letters, digits and hyphens, starting with a letter", k, v)
+			}
+		}
 	}
 	if c.MachineType == "" {
 		bad("machine_type is required")
+	} else if !gceNameRe.MatchString(c.MachineType) {
+		bad("machine_type %q is not a machine type name, e.g. e2-standard-4", c.MachineType)
 	}
 	if c.CodeDiskGB < 10 {
 		bad("code_disk_gb must be at least 10")
@@ -192,11 +206,10 @@ func (c *Config) Validate() error {
 			bad("extra_packages: %q is not an apt package name", p)
 		}
 	}
-	if c.Git.Name == "" || c.Git.Email == "" || !strings.Contains(c.Git.Email, "@") {
+	if c.Git.Name == "" || c.Git.Email == "" {
 		bad("git.name and git.email are required")
-	}
-	if strings.ContainsAny(c.Git.Email, " \t") {
-		bad("git.email %q contains whitespace", c.Git.Email)
+	} else if !emailRe.MatchString(c.Git.Email) {
+		bad("git.email %q is not a plain email address", c.Git.Email)
 	}
 	rejectControl(reflect.ValueOf(c).Elem(), "", bad)
 	if !tagRe.MatchString(c.Tailscale.Tag) {
@@ -213,7 +226,7 @@ func (c *Config) Validate() error {
 	if c.Snapshots.RetentionDays < 1 {
 		bad("snapshots.retention_days must be at least 1")
 	}
-	if c.Alerts.Email != "" && !strings.Contains(c.Alerts.Email, "@") {
+	if c.Alerts.Email != "" && !emailRe.MatchString(c.Alerts.Email) {
 		bad("alerts.email %q is not an email address", c.Alerts.Email)
 	}
 	for k, v := range map[string]int{"alerts.cpu_high_pct": c.Alerts.CPUHighPct, "alerts.cpu_idle_pct": c.Alerts.CPUIdlePct, "alerts.disk_used_pct": c.Alerts.DiskUsedPct} {

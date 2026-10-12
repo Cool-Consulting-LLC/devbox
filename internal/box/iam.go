@@ -197,17 +197,27 @@ func (b *Box) planProjectIAM(ctx context.Context, p *Plan) error {
 
 // --- per-secret grants ---
 
-// boxSecretIDs are the secrets this box reads: the two named in devbox.yaml, and
+// The Tailscale OAuth secret mints keys that join any device to the tailnet, and
+// provision.sh needs it only once: to join a disk that has no Tailscale state.
+// So the box never holds standing access to it. When the code disk is created,
+// or on `devbox reprovision --rejoin`, it gets an IAM grant that expires on its
+// own after tailnetJoinWindow.
+const (
+	tailnetJoinWindow = time.Hour
+	joinCondTitle     = "devbox-tailnet-join"
+)
+
+// boxSecretIDs are the secrets this box reads at any time: the machine key, and
 // every secret labelled devbox=<name>, which is how `devbox project secret`
-// stores project secrets.
+// stores project secrets. The Tailscale OAuth secret is not one of them.
 func (b *Box) boxSecretIDs(ctx context.Context) ([]string, error) {
-	ids := []string{b.C.Tailscale.OAuthSecret, b.C.SSHKey.Secret}
+	ids := []string{b.C.SSHKey.Secret}
 	labelled, err := b.ListLabelledSecrets(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, s := range labelled {
-		if id := gcp.Last(s.Name); !slices.Contains(ids, id) {
+		if id := gcp.Last(s.Name); !slices.Contains(ids, id) && id != b.C.Tailscale.OAuthSecret {
 			ids = append(ids, id)
 		}
 	}
@@ -223,15 +233,22 @@ func secretGranted(pol *secretmanager.Policy, member string) bool {
 	return false
 }
 
+// getSecretPolicy reads at version 3, the only version that shows conditions.
+func (b *Box) getSecretPolicy(ctx context.Context, id string) (*secretmanager.Policy, error) {
+	return b.G.Secrets.Projects.Secrets.GetIamPolicy(b.secretName(id)).OptionsRequestedPolicyVersion(3).Context(ctx).Do()
+}
+
 // planSecretIAM grants the box's service account secretAccessor on each of its
-// own secrets and nothing else. A missing secret is checkSecrets' to report.
+// own secrets and nothing else, and takes away standing access to the Tailscale
+// OAuth secret that earlier versions granted. A missing secret is checkSecrets'
+// to report.
 func (b *Box) planSecretIAM(ctx context.Context, p *Plan) error {
 	ids, err := b.boxSecretIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("secrets: %w", err)
 	}
 	for _, id := range ids {
-		pol, err := b.G.Secrets.Projects.Secrets.GetIamPolicy(b.secretName(id)).Context(ctx).Do()
+		pol, err := b.getSecretPolicy(ctx, id)
 		if gcp.IsNotFound(err) {
 			continue
 		}
@@ -245,32 +262,96 @@ func (b *Box) planSecretIAM(ctx context.Context, p *Plan) error {
 			return b.grantSecret(ctx, id)
 		}})
 	}
+	ts := b.C.Tailscale.OAuthSecret
+	pol, err := b.getSecretPolicy(ctx, ts)
+	if gcp.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("secret %s IAM policy: %w", ts, err)
+	}
+	if secretGranted(pol, b.C.SAMember()) {
+		p.add(Op{Resource: "secret " + ts, Action: "update", Detail: "revoke " + b.C.Name + "'s standing read; it gets one for an hour when it joins the tailnet", Run: func(ctx context.Context) error {
+			return b.editSecretPolicy(ctx, ts, func(pol *secretmanager.Policy) bool {
+				return dropSecretMember(pol, b.C.SAMember(), func(bd *secretmanager.Binding) bool { return bd.Condition == nil })
+			})
+		}})
+	}
 	return nil
 }
 
-// grantSecret is a read-modify-write of one secret's IAM policy, retried on
-// etag races and on a service account IAM cannot see yet.
+// joinOp lets the box read the Tailscale OAuth secret for tailnetJoinWindow.
+func (b *Box) joinOp() Op {
+	return Op{Resource: "secret " + b.C.Tailscale.OAuthSecret, Action: "update",
+		Detail: fmt.Sprintf("let %s read it for %s, to join the tailnet", b.C.Name, tailnetJoinWindow),
+		Run:    b.GrantTailnetJoin}
+}
+
+// GrantTailnetJoin gives the box read access to the Tailscale OAuth secret until
+// tailnetJoinWindow from now, replacing any earlier window or standing grant.
+func (b *Box) GrantTailnetJoin(ctx context.Context) error {
+	until := time.Now().Add(tailnetJoinWindow).UTC().Format(time.RFC3339)
+	member := b.C.SAMember()
+	return b.editSecretPolicy(ctx, b.C.Tailscale.OAuthSecret, func(pol *secretmanager.Policy) bool {
+		dropSecretMember(pol, member, func(bd *secretmanager.Binding) bool {
+			return bd.Condition == nil || bd.Condition.Title == joinCondTitle
+		})
+		pol.Bindings = append(pol.Bindings, &secretmanager.Binding{Role: secretRole, Members: []string{member}, Condition: &secretmanager.Expr{
+			Title:       joinCondTitle,
+			Description: "devbox " + b.C.Name + ": join the tailnet once, then expire",
+			Expression:  fmt.Sprintf("request.time < timestamp(%q)", until),
+		}})
+		return true
+	})
+}
+
+// dropSecretMember removes member from the secretRole bindings that match, and
+// any binding that leaves empty.
+func dropSecretMember(pol *secretmanager.Policy, member string, match func(*secretmanager.Binding) bool) bool {
+	changed := false
+	pol.Bindings = slices.DeleteFunc(pol.Bindings, func(bd *secretmanager.Binding) bool {
+		if bd.Role != secretRole || !match(bd) {
+			return false
+		}
+		n := len(bd.Members)
+		bd.Members = slices.DeleteFunc(bd.Members, func(m string) bool { return m == member })
+		changed = changed || len(bd.Members) != n
+		return len(bd.Members) == 0
+	})
+	return changed
+}
+
+// grantSecret gives the box standing read access to one secret.
 func (b *Box) grantSecret(ctx context.Context, id string) error {
-	retryable := func(err error) bool { c := gcp.Code(err); return c == 409 || c == 400 || c == 412 }
-	return gcp.Retry(ctx, 90*time.Second, retryable, func() error {
-		pol, err := b.G.Secrets.Projects.Secrets.GetIamPolicy(b.secretName(id)).Context(ctx).Do()
-		if err != nil {
-			return err
-		}
+	return b.editSecretPolicy(ctx, id, func(pol *secretmanager.Policy) bool {
 		if secretGranted(pol, b.C.SAMember()) {
-			return nil
+			return false
 		}
-		found := false
 		for _, bd := range pol.Bindings {
 			if bd.Role == secretRole && bd.Condition == nil {
 				bd.Members = append(bd.Members, b.C.SAMember())
-				found = true
-				break
+				return true
 			}
 		}
-		if !found {
-			pol.Bindings = append(pol.Bindings, &secretmanager.Binding{Role: secretRole, Members: []string{b.C.SAMember()}})
+		pol.Bindings = append(pol.Bindings, &secretmanager.Binding{Role: secretRole, Members: []string{b.C.SAMember()}})
+		return true
+	})
+}
+
+// editSecretPolicy is a read-modify-write of one secret's IAM policy, retried
+// on etag races and on a service account IAM cannot see yet. edit reports
+// whether it changed anything.
+func (b *Box) editSecretPolicy(ctx context.Context, id string, edit func(*secretmanager.Policy) bool) error {
+	retryable := func(err error) bool { c := gcp.Code(err); return c == 409 || c == 400 || c == 412 }
+	return gcp.Retry(ctx, 90*time.Second, retryable, func() error {
+		pol, err := b.getSecretPolicy(ctx, id)
+		if err != nil {
+			return err
 		}
+		if !edit(pol) {
+			return nil
+		}
+		pol.Version = 3 // conditions are lost at any lower version
 		_, err = b.G.Secrets.Projects.Secrets.SetIamPolicy(b.secretName(id), &secretmanager.SetIamPolicyRequest{Policy: pol}).Context(ctx).Do()
 		return err
 	})

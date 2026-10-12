@@ -8,9 +8,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	crm "google.golang.org/api/cloudresourcemanager/v1"
 	compute "google.golang.org/api/compute/v1"
+	secretmanager "google.golang.org/api/secretmanager/v1"
 
 	"github.com/Cool-Consulting-LLC/devbox/internal/config"
 	"github.com/Cool-Consulting-LLC/devbox/internal/gcp"
@@ -99,10 +101,15 @@ func TestUpFromNothing(t *testing.T) {
 	if e.b.hasProjectSecretGrant(f.projPolicy) {
 		t.Fatal("secretAccessor granted project-wide; it must be per secret")
 	}
-	for _, id := range []string{"devbox-tailscale-oauth", "devbox-ssh-key"} {
-		if pol := f.secrets[id].policy; pol == nil || !secretGranted(pol, e.b.C.SAMember()) {
-			t.Fatalf("%s not readable by the box", id)
-		}
+	if pol := f.secrets["devbox-ssh-key"].policy; pol == nil || !secretGranted(pol, e.b.C.SAMember()) {
+		t.Fatal("machine key not readable by the box")
+	}
+	ts := f.secrets["devbox-tailscale-oauth"].policy
+	if ts == nil || secretGranted(ts, e.b.C.SAMember()) {
+		t.Fatal("the box must not hold standing access to the Tailscale OAuth secret")
+	}
+	if until, ok := joinWindow(ts, e.b.C.SAMember()); !ok || until.Before(time.Now().Add(50*time.Minute)) || until.After(time.Now().Add(time.Hour)) {
+		t.Fatalf("no hour-long tailnet join window: %v %v", until, ok)
 	}
 	if pol := f.instIAM["devbox"]; pol == nil || pol.Bindings[0].Role != e.b.C.SuspendRoleName() {
 		t.Fatal("self-suspend not granted on the instance")
@@ -480,6 +487,81 @@ func TestLegacyProjectSecretGrantRevoked(t *testing.T) {
 		t.Fatal("legacy grant left in place")
 	}
 	e.assertConverged()
+}
+
+// joinWindow finds member's expiring grant on a secret and when it ends.
+func joinWindow(pol *secretmanager.Policy, member string) (time.Time, bool) {
+	for _, bd := range pol.Bindings {
+		if bd.Role == secretRole && bd.Condition != nil && bd.Condition.Title == joinCondTitle && slices.Contains(bd.Members, member) {
+			ts, ok := strings.CutPrefix(bd.Condition.Expression, `request.time < timestamp("`)
+			until, err := time.Parse(time.RFC3339, strings.TrimSuffix(ts, `")`))
+			return until, ok && err == nil
+		}
+	}
+	return time.Time{}, false
+}
+
+// Boxes built before the join window read the Tailscale OAuth secret forever.
+func TestStandingTailnetGrantRevoked(t *testing.T) {
+	e := setup(t)
+	e.run(ModeUp)
+	if err := e.b.grantSecret(e.ctx, "devbox-tailscale-oauth"); err != nil {
+		t.Fatal(err)
+	}
+	p := e.run(ModeUp)
+	if got := actions(p); !slices.Equal(got, []string{"update secret devbox-tailscale-oauth"}) {
+		t.Fatalf("migration did %v", got)
+	}
+	if secretGranted(e.f.secrets["devbox-tailscale-oauth"].policy, e.b.C.SAMember()) {
+		t.Fatal("standing grant left in place")
+	}
+	e.assertConverged()
+}
+
+// A replaced instance keeps /srv/code and its tailnet identity: no join window.
+// A new code disk has none, so it gets one.
+func TestTailnetJoinOnlyForNewDisk(t *testing.T) {
+	e := setup(t)
+	e.run(ModeUp)
+	for _, it := range e.f.instances["devbox"].Metadata.Items {
+		if it.Key == mdUserData {
+			v := "#cloud-config\n# older\n"
+			it.Value = &v
+		}
+	}
+	if got := actions(e.plan(ModeApply)); slices.Contains(got, "update secret devbox-tailscale-oauth") {
+		t.Fatalf("replace opened a join window: %v", got)
+	}
+	e.run(ModeApply)
+	delete(e.f.disks, "devbox-code")
+	delete(e.f.instances, "devbox")
+	got := actions(e.plan(ModeUp))
+	i := slices.Index(got, "update secret devbox-tailscale-oauth")
+	if i < 0 || i > slices.Index(got, "create disk devbox-code") {
+		t.Fatalf("new disk without a join window first: %v", got)
+	}
+}
+
+// GCP's default-allow-ssh, on the box's network, with an external IP: up and
+// apply refuse. Without an external IP the internet cannot reach it.
+func TestCheckExposure(t *testing.T) {
+	e := setup(t)
+	if err := e.b.CheckExposure(e.ctx); err != nil {
+		t.Fatalf("no foreign rules: %v", err)
+	}
+	e.run(ModeUp)
+	if err := e.b.CheckExposure(e.ctx); err != nil {
+		t.Fatalf("devbox's own rules count as exposure: %v", err)
+	}
+	e.f.firewalls["default-allow-ssh"] = &compute.Firewall{Name: "default-allow-ssh", Network: "projects/p/global/networks/devbox",
+		Direction: "INGRESS", SourceRanges: []string{"0.0.0.0/0"}, Allowed: []*compute.FirewallAllowed{{IPProtocol: "tcp", Ports: []string{"22"}}}}
+	if err := e.b.CheckExposure(e.ctx); !errors.Is(err, ErrExposed) || !strings.Contains(err.Error(), "default-allow-ssh") {
+		t.Fatalf("open sshd not caught: %v", err)
+	}
+	*e.b.C.ExternalIP = false
+	if err := e.b.CheckExposure(e.ctx); err != nil {
+		t.Fatalf("no external IP: %v", err)
+	}
 }
 
 func TestPutSecretGrantsTheBox(t *testing.T) {

@@ -3,7 +3,11 @@
 # .devbox-env. Each line lands in the *session* environment, so every window and pane
 # inherits it. `KEY=@secret:ID` values are fetched now and never written to disk,
 # unless the file sets DEVBOX_DOTENV=1, which renders <dir>/.env (mode 600).
+# The session is created by a command fed to tmux on stdin, not on its command
+# line, where any user on the box could read the values with ps.
 set -uo pipefail
+# tq WORD: quote WORD for tmux's command parser: single quotes, ' as '"'"'.
+tq() { local s=${1//\'/\'\"\'\"\'}; printf "'%s'" "$s"; }
 recreate=""
 if [ "${1:-}" = "--recreate" ]; then recreate=${2:?usage: devbox-sessions --recreate NAME}; fi
 
@@ -14,7 +18,7 @@ for envf in /srv/code/*/.devbox-env; do
   if [ "$s" = "$recreate" ]; then tmux kill-session -t "=$s" 2>/dev/null || true; fi
   tmux has-session -t "=$s" 2>/dev/null && continue
 
-  args=() lines=() dotenv=0 ok=1
+  cmd="new-session -d -s $(tq "$s") -c $(tq "$dir")" lines=() dotenv=0 ok=1
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%$'\r'}
     case $line in ''|'#'*) continue ;; esac
@@ -29,11 +33,13 @@ for envf in /srv/code/*/.devbox-env; do
       fi
     fi
     if [ "$key" = DEVBOX_DOTENV ]; then dotenv=$val; continue; fi
-    args+=(-e "$key=$val"); lines+=("$key=$val")
+    cmd+=" -e $(tq "$key=$val")"; lines+=("$key=$val")
   done < "$envf"
   [ "$ok" = 1 ] || continue
 
-  tmux new-session -d -s "$s" -c "$dir" "${args[@]}"
+  if ! printf '%s\n' "$cmd" | tmux start-server \; source-file -; then
+    echo "devbox-sessions: $s: tmux refused the session" >&2; continue
+  fi
   # An explicit mode, not umask: /srv/code's default ACLs override the umask.
   if [ "$dotenv" = 1 ]; then install -m 600 /dev/null "$dir/.env" && printf '%s\n' "${lines[@]}" > "$dir/.env"; fi
   [ "${QUIET:-}" ] || echo "devbox-sessions: created $s"

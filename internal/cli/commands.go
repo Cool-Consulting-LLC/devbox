@@ -57,15 +57,36 @@ for each failure. Exits non-zero if anything is FAIL or MISSING.
 	return cmd
 }
 
+// exposureGuard refuses to go on when the box would be open to the internet,
+// unless allow, in which case it says so and goes on.
+func exposureGuard(ctx context.Context, b *box.Box, allow bool) error {
+	err := b.CheckExposure(ctx)
+	switch {
+	case err == nil:
+		return nil
+	case !errors.Is(err, box.ErrExposed):
+		return err
+	case !allow:
+		return fmt.Errorf("%w\n--allow-exposure goes ahead anyway", err)
+	}
+	fmt.Printf("  ! %v\n  ! going ahead anyway: --allow-exposure\n\n", err)
+	return nil
+}
+
 func upCmd(g *globals) *cobra.Command {
-	return &cobra.Command{
+	var allowExposure bool
+	cmd := &cobra.Command{
 		Use:   "up",
 		Short: "Create what is missing, resume if suspended",
 		Long: `Creates every missing resource and resumes or starts the instance. One command
 whether the box is absent, suspended or stopped.
 
 up never replaces or restarts an existing instance. If devbox.yaml asks for a
-change that would, up says so and leaves it for ` + "`devbox apply`.",
+change that would, up says so and leaves it for ` + "`devbox apply`." + `
+
+up refuses to run while the box has an external IP and a firewall rule devbox
+did not create admits the internet (see ` + "`devbox preflight`" + `), unless
+--allow-exposure.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
@@ -75,6 +96,9 @@ change that would, up says so and leaves it for ` + "`devbox apply`.",
 				return err
 			}
 			header(b, "up")
+			if err := exposureGuard(ctx, b, allowExposure); err != nil {
+				return err
+			}
 			created := false
 			p, err := b.Reconcile(ctx, box.ModeUp)
 			if err != nil {
@@ -97,6 +121,8 @@ change that would, up says so and leaves it for ` + "`devbox apply`.",
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&allowExposure, "allow-exposure", false, "go ahead even if firewall rules open the box to the internet")
+	return cmd
 }
 
 func downCmd(g *globals) *cobra.Command {
@@ -154,7 +180,7 @@ func statusCmd(g *globals) *cobra.Command {
 }
 
 func applyCmd(g *globals) *cobra.Command {
-	var dryRun, yes bool
+	var dryRun, yes, allowExposure bool
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Reconcile config to reality; prints the diff first",
@@ -165,7 +191,11 @@ func applyCmd(g *globals) *cobra.Command {
   ~!   restart: the instance is stopped and started; memory state is lost
 
 A suspended instance is always resumed before it is changed. Replace and restart
-ask for confirmation unless --yes. --dry-run prints and stops.`,
+ask for confirmation unless --yes. --dry-run prints and stops.
+
+Like up, it refuses to run while the box has an external IP and a firewall rule
+devbox did not create admits the internet, unless --allow-exposure. --dry-run
+reports such rules and goes on.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
@@ -175,6 +205,9 @@ ask for confirmation unless --yes. --dry-run prints and stops.`,
 				return err
 			}
 			header(b, "apply")
+			if err := exposureGuard(ctx, b, allowExposure || dryRun); err != nil {
+				return err
+			}
 			p, err := b.Reconcile(ctx, box.ModeApply)
 			if err != nil {
 				return err
@@ -199,6 +232,7 @@ ask for confirmation unless --yes. --dry-run prints and stops.`,
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the operations and stop")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "do not ask before replace or restart")
+	cmd.Flags().BoolVar(&allowExposure, "allow-exposure", false, "go ahead even if firewall rules open the box to the internet")
 	return cmd
 }
 
@@ -273,6 +307,7 @@ exit "$rc"`
 
 func reprovisionCmd(g *globals) *cobra.Command {
 	var rf remoteFlags
+	var rejoin bool
 	cmd := &cobra.Command{
 		Use:   "reprovision",
 		Short: "Push provision.sh from the repo and run it",
@@ -285,7 +320,11 @@ Runs anywhere: on the laptop it reaches the box over Tailscale SSH (or --iap);
 on the box it runs locally. Either way it logs in as you. Root on the box only
 ever runs what metadata holds, so the Google credentials here must be able to
 set the instance's metadata. On the box, that means your own
-` + "`gcloud auth application-default login`" + `: the box's service account cannot.`,
+` + "`gcloud auth application-default login`" + `: the box's service account cannot.
+
+The box can read the Tailscale OAuth secret only for an hour after its code disk
+is created. If it has not joined the tailnet by then, --rejoin opens another
+hour before the re-run; use it with --iap, since the tailnet is what is missing.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
@@ -304,6 +343,12 @@ set the instance's metadata. On the box, that means your own
 			if in == nil || in.Status != "RUNNING" {
 				return fmt.Errorf("instance %s is not running; `devbox up` first", b.C.Name)
 			}
+			if rejoin {
+				if err := b.GrantTailnetJoin(ctx); err != nil {
+					return fmt.Errorf("letting the box read %s: %w", b.C.Tailscale.OAuthSecret, err)
+				}
+				fmt.Printf("%s can read %s for the next hour\n", b.C.Name, b.C.Tailscale.OAuthSecret)
+			}
 			t, err := rf.target(ctx, b)
 			if err != nil {
 				return err
@@ -319,6 +364,7 @@ set the instance's metadata. On the box, that means your own
 		},
 	}
 	rf.add(cmd)
+	cmd.Flags().BoolVar(&rejoin, "rejoin", false, "let the box read the Tailscale OAuth secret for an hour, to join the tailnet")
 	return cmd
 }
 

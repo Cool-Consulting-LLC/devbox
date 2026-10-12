@@ -56,6 +56,13 @@ func TestRejects(t *testing.T) {
 		"no network":      "project_id: my-devbox-project\ngit: {name: A, email: a@b.c}",
 		"newline in name": noGit + "git: {name: \"A\\n[core]\\n\\tsshCommand = x\", email: a@b.c}",
 		"space in email":  noGit + "git: {name: A, email: 'a b@c.d'}",
+		"wildcard email":  noGit + "git: {name: A, email: '*@example.com'}",
+		"list email":      noGit + "git: {name: A, email: 'a@example.com,b@example.com'}",
+		"no-domain email": noGit + "git: {name: A, email: a@b}",
+		"alert email":     minimal + "alerts: {email: 'nobody'}",
+		"bad network":     "project_id: my-devbox-project\nnetwork: {name: 'x/../y', subnet: s}\ngit: {name: A, email: a@b.c}",
+		"bad subnet":      "project_id: my-devbox-project\nnetwork: {name: n, subnet: 'S?x'}\ngit: {name: A, email: a@b.c}",
+		"bad machine":     minimal + "machine_type: 'e2/../x'",
 		"newline nested":  minimal + "extra_packages: [\"nodejs\\n\"]",
 		"bad name":        minimal + "name: Dev_Box",
 		"short name":      minimal + "name: dev",
@@ -74,6 +81,7 @@ func TestRejects(t *testing.T) {
 func TestAccepts(t *testing.T) {
 	for _, y := range []string{
 		noGit + "git: {name: \"Ada Lovelace\", email: ada@example.com}",
+		noGit + "git: {name: A, email: first.last+devbox@mail.example.co.uk}",
 		minimal + "break_glass: {enabled: true, source_cidr: 203.0.113.7/32}",
 		minimal + "break_glass: {enabled: true, source_cidr: '2001:db8::/64', allow_mosh: true}",
 		minimal + "break_glass: {enabled: false, source_cidr: 0.0.0.0/0}", // ignored when disabled

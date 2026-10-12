@@ -418,6 +418,13 @@ func (f *fakeGCP) firewallsAPI(r *http.Request, name string, body []byte) (any, 
 		f.firewalls[fw.Name] = fw
 		return done(""), nil
 	}
+	if name == "" && r.Method == http.MethodGet {
+		out := &compute.FirewallList{}
+		for _, fw := range f.firewalls {
+			out.Items = append(out.Items, fw)
+		}
+		return out, nil
+	}
 	fw := f.firewalls[name]
 	if fw == nil {
 		return nil, errf(404, "firewall %s not found", name)

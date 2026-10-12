@@ -32,7 +32,9 @@ claude_working=0
 claude_waiting=0
 for f in /run/devbox-claude/*; do
   [ -f "$f" ] && [ ! -L "$f" ] || continue
-  read -r state pid < "$f" 2>/dev/null
+  # Users own these files and can swap one for a FIFO after the test above;
+  # a plain read would then block this check, and with it suspend, forever.
+  read -r state pid < <(timeout 2 head -c 64 -- "$f" 2>/dev/null)
   if [[ ! $pid =~ ^[0-9]+$ ]] || [ "$(cat /proc/"$pid"/comm 2>/dev/null)" != claude ]; then
     rm -f "$f"
     continue
@@ -71,5 +73,6 @@ zone=$(md instance/zone | cut -d/ -f4)
 name=$(md instance/name)
 tok=$(md instance/service-accounts/default/token | jq -r .access_token)
 logger -t devbox-idle "idle ${idle_min}m >= ${THRESHOLD}m, suspending ($(cat /run/devbox-idle.status))"
-curl -fsS -X POST -H "Authorization: Bearer $tok" -H 'Content-Length: 0' \
+# The token goes to curl on stdin: on its command line, ps would show it to anyone.
+printf 'Authorization: Bearer %s\n' "$tok" | curl -fsS -X POST -H @- -H 'Content-Length: 0' \
   "https://compute.googleapis.com/compute/v1/projects/$(md project/project-id)/zones/$zone/instances/$name/suspend" >/dev/null

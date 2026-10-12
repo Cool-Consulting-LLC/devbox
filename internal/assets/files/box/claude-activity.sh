@@ -20,5 +20,6 @@ pid=$PPID
 while [ "${pid:-0}" -gt 1 ] && [ "$(cat /proc/"$pid"/comm 2>/dev/null)" != claude ]; do
   pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
 done
-[ "${pid:-0}" -gt 1 ] && echo "$state $pid" > "$f"
+# Only admins can write here; for anyone else this fails, and that is fine.
+[ "${pid:-0}" -gt 1 ] && echo "$state $pid" 2>/dev/null > "$f"
 exit 0

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/Cool-Consulting-LLC/devbox/internal/config"
@@ -127,7 +128,29 @@ func (b *Box) Reconcile(ctx context.Context, mode Mode) (*Plan, error) {
 		}
 		p.Ops = kept
 	}
+	if err := b.planTailnetJoin(ctx, p); err != nil {
+		return nil, err
+	}
 	return p, nil
+}
+
+// planTailnetJoin puts joinOp before the op that creates the code disk, after
+// the service account it grants to. A new disk has no Tailscale state, so its
+// first boot joins the tailnet. A replaced instance keeps its disk and its
+// tailnet identity, and needs no window.
+func (b *Box) planTailnetJoin(ctx context.Context, p *Plan) error {
+	i := slices.IndexFunc(p.Ops, func(o Op) bool {
+		return o.Resource == "disk "+b.C.CodeDiskName() && o.Action == "create"
+	})
+	if i < 0 {
+		return nil
+	}
+	ok, err := b.SecretExists(ctx, b.C.Tailscale.OAuthSecret)
+	if err != nil || !ok {
+		return err // checkSecrets has warned about a missing one
+	}
+	p.Ops = slices.Insert(p.Ops, i, b.joinOp())
+	return nil
 }
 
 func (b *Box) logf(f string, a ...any) { fmt.Fprintf(b.Out, "      "+f+"\n", a...) }

@@ -41,7 +41,9 @@ func (t Target) Run(ctx context.Context, cmd string, stdin io.Reader) error {
 		if stdin != nil {
 			args = append(args, "-T")
 		}
-		c = exec.CommandContext(ctx, "ssh", append(args, dest, cmd)...)
+		// -- ends the options: a --host or --user starting with - is then a
+		// (bad) destination, not an ssh option such as -oProxyCommand.
+		c = exec.CommandContext(ctx, "ssh", append(args, "--", dest, cmd)...)
 	}
 	c.Stdout, c.Stderr = os.Stdout, os.Stderr
 	if stdin != nil {

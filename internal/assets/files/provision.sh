@@ -178,7 +178,38 @@ if [ "$need_update" = 1 ] || [ -z "$(find /var/lib/apt/lists -maxdepth 0 -mmin -
   apt_get update -q
 fi
 # shellcheck disable=SC2086
-apt_get install -y -q acl claude-code gh golang-go nodejs npm tailscale terraform $DEVBOX_EXTRA_PACKAGES
+apt_get install -y -q acl claude-code gh golang-go nodejs npm python3-pytest tailscale terraform $DEVBOX_EXTRA_PACKAGES
+
+# release_bin NAME VERSION SHA256_X86_64 SHA256_AARCH64 BIN...: install BINs to
+# /usr/local/bin from Astral's GitHub release tarball for NAME. uv and ruff are
+# not packaged for Ubuntu, so they are pinned like the apt keys above: a tarball
+# whose hash is not the one written here is refused. Bump a version together
+# with both of its hashes, from the release's .sha256 files.
+release_bin() {
+  local name=$1 ver=$2 sum tmp dir b; shift 2
+  case $(uname -m) in
+    x86_64) sum=$1 ;;
+    aarch64) sum=$2 ;;
+    *) echo "$name: no build for $(uname -m)" >&2; exit 1 ;;
+  esac
+  shift 2
+  if "/usr/local/bin/$name" --version 2>/dev/null | grep -qF " $ver"; then return 0; fi
+  dir=$name-$(uname -m)-unknown-linux-gnu
+  tmp=$(mktemp -d)
+  curl -fsSL "https://github.com/astral-sh/$name/releases/download/$ver/$dir.tar.gz" -o "$tmp/release.tar.gz"
+  echo "$sum  $tmp/release.tar.gz" | sha256sum -c --quiet - || { echo "$name $ver: checksum mismatch; refusing" >&2; exit 1; }
+  tar -xzf "$tmp/release.tar.gz" -C "$tmp"
+  for b in "$@"; do install -m 0755 "$tmp/$dir/$b" /usr/local/bin/; done
+  rm -rf "$tmp"
+}
+release_bin uv 0.13.0 \
+  1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154 \
+  3ccfb6af6e242433eb552f7d9676abd5412c6595c497e990d9c8cb7b5bd4d2c3 \
+  uv uvx
+release_bin ruff 0.17.0 \
+  c94fc1dc71f054d06d9f1149442dcb471516aa2b7d4b7e8124e05d082d4c91d3 \
+  294e181ba6ccb0c2ffd778580e3c42b19f038bdbcb844f39fd9a6a26e8148804 \
+  ruff
 
 step ssh-agent
 export SSH_AUTH_SOCK=/run/devbox-agent/agent.sock
@@ -250,7 +281,19 @@ systemctl enable --now tailscaled
 state=$(tailscale status --json 2>/dev/null | jq -r .BackendState || echo NoState)
 if [ "$state" != Running ]; then
   umask 077
-  devbox-secret "$DEVBOX_TS_SECRET" > /run/ts.key
+  # The box may read the OAuth secret only for an hour after `devbox up` created
+  # the code disk, and a fresh grant can take minutes to reach IAM.
+  for i in $(seq 20); do
+    devbox-secret "$DEVBOX_TS_SECRET" > /run/ts.key 2>/dev/null && break
+    if [ "$i" = 20 ]; then
+      rm -f /run/ts.key
+      echo "cannot read secret $DEVBOX_TS_SECRET to join the tailnet. The box gets an hour" >&2
+      echo "to read it after its code disk is created; from the laptop, run:" >&2
+      echo "  devbox reprovision --iap --rejoin" >&2
+      exit 1
+    fi
+    sleep 15
+  done
   printf '?preauthorized=true&ephemeral=false' >> /run/ts.key
   umask 022
   tailscale up \
@@ -278,7 +321,9 @@ rm -f /run/motd.dynamic
 
 step idle-suspend
 # Where the claude-activity.sh hook tells the idle check which sessions are mid-turn.
-install -d -m 1777 /run/devbox-claude
+# Admins can add files but not list the directory, and the sticky bit stops them
+# removing each other's. Everyone else stays out, so cannot keep the box awake.
+install -d -m 1730 -o root -g google-sudoers /run/devbox-claude
 if [ "$DEVBOX_IDLE_ENABLED" = true ]; then
   systemctl enable --now devbox-idle.timer
 else

@@ -2,6 +2,7 @@ package box
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -277,20 +278,14 @@ func (b *Box) checkNetwork(ctx context.Context, add func(check)) {
 // traffic reach the box. GCP's network called default ships default-allow-ssh
 // from 0.0.0.0/0, which with an external IP puts sshd on the internet.
 func (b *Box) checkExposure(ctx context.Context, add func(check)) {
-	var rules []*compute.Firewall
-	err := b.G.Compute.Firewalls.List(b.C.ProjectID).Pages(ctx, func(l *compute.FirewallList) error {
-		rules = append(rules, l.Items...)
-		return nil
-	})
+	internet, internal, err := b.exposure(ctx)
 	if err != nil {
 		add(check{"exposure", "", stWarn, "cannot list firewall rules: " + short(err)})
 		return
 	}
-	own := b.desiredFirewalls()
-	internet, internal := exposingRules(rules, b.C.Network.Name, b.C.SAEmail(), func(n string) bool { return own[n] != nil })
 	switch {
 	case len(internet) > 0 && b.C.WantExternalIP():
-		add(check{"exposure", strings.Join(internet, ", "), stFail, "these rules open the box to the internet. Delete them, scope them with target tags, or use a dedicated network (README.md, step 2)"})
+		add(check{"exposure", strings.Join(internet, ", "), stFail, exposureHint})
 	case len(internet) > 0:
 		add(check{"exposure", strings.Join(internet, ", "), stWarn, "these rules allow traffic from the internet; harmless without an external IP, but they apply the moment one is added"})
 	}
@@ -300,6 +295,43 @@ func (b *Box) checkExposure(ctx context.Context, add func(check)) {
 	if len(internet) == 0 && len(internal) == 0 {
 		add(check{"exposure", "only devbox's own rules", stOK, ""})
 	}
+}
+
+const exposureHint = "these rules open the box to the internet. Delete them, scope them with target tags, or use a dedicated network (README.md, step 2)"
+
+func (b *Box) exposure(ctx context.Context) (internet, internal []string, err error) {
+	var rules []*compute.Firewall
+	err = b.G.Compute.Firewalls.List(b.C.ProjectID).Pages(ctx, func(l *compute.FirewallList) error {
+		rules = append(rules, l.Items...)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	own := b.desiredFirewalls()
+	internet, internal = exposingRules(rules, b.C.Network.Name, b.C.SAEmail(), func(n string) bool { return own[n] != nil })
+	return internet, internal, nil
+}
+
+// ErrExposed marks a box that would be reachable from the internet.
+var ErrExposed = errors.New("the box would be reachable from the internet")
+
+// CheckExposure is preflight's exposure check on its own, for up and apply: an
+// error if the box has, or will get, an external IP and a firewall rule devbox
+// did not create admits the internet. A rule list it cannot read is an error
+// too, since then nothing says the box is safe.
+func (b *Box) CheckExposure(ctx context.Context) error {
+	if !b.C.WantExternalIP() {
+		return nil
+	}
+	internet, _, err := b.exposure(ctx)
+	if err != nil {
+		return fmt.Errorf("%w? cannot list firewall rules to tell: %s", ErrExposed, short(err))
+	}
+	if len(internet) > 0 {
+		return fmt.Errorf("%w:\n  %s\n%s", ErrExposed, strings.Join(internet, "\n  "), exposureHint)
+	}
+	return nil
 }
 
 // exposingRules names the enabled ingress allow rules on network that apply to
