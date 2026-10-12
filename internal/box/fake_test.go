@@ -52,6 +52,7 @@ type fakeGCP struct {
 	secrets    map[string]*fakeSecret
 	channels   map[string]*monitoring.NotificationChannel
 	alerts     map[string]*monitoring.AlertPolicy
+	uptimeSecs []float64 // points returned for any time series query
 
 	srv *httptest.Server
 }
@@ -662,6 +663,13 @@ func (f *fakeGCP) monitoring(r *http.Request, p string, body []byte) (any, error
 	kind := parts[2]
 	if len(parts) == 3 {
 		if r.Method == http.MethodGet {
+			if kind == "timeSeries" {
+				ts := &monitoring.TimeSeries{}
+				for _, v := range f.uptimeSecs {
+					ts.Points = append(ts.Points, &monitoring.Point{Value: &monitoring.TypedValue{DoubleValue: &v}})
+				}
+				return &monitoring.ListTimeSeriesResponse{TimeSeries: []*monitoring.TimeSeries{ts}}, nil
+			}
 			if kind == "notificationChannels" {
 				out := &monitoring.ListNotificationChannelsResponse{}
 				for _, k := range sortedKeys(f.channels) {

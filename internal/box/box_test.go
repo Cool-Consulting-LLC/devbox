@@ -3,6 +3,7 @@ package box
 import (
 	"strings"
 	"testing"
+	"time"
 
 	crm "google.golang.org/api/cloudresourcemanager/v1"
 	compute "google.golang.org/api/compute/v1"
@@ -180,5 +181,26 @@ func TestE2StandardVCPUs(t *testing.T) {
 		if _, ok := e2StandardVCPUs(mt); ok {
 			t.Errorf("%s accepted", mt)
 		}
+	}
+}
+
+func TestPrintCost(t *testing.T) {
+	b := testBox(t) // e2-standard-4 in europe-west4, external IP
+	now := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
+	var out strings.Builder
+	b.printCost(&out, costInputs{bootGB: 30, codeGB: 50, now: now, runHours: 73})
+	// disks 9.60 + compute 107.70 + IP 3.65 running; 9.60 + 2.72 suspended.
+	// 73 h running and 167 h suspended so far, then 744/240 of that for October.
+	for _, want := range []string{"$14.91", "73.0 h running", "$46.23", "$12.32", "$120.95", "e2-standard-4 $107.70"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+
+	out.Reset()
+	b.C.Zone = "us-east1-b"
+	b.printCost(&out, costInputs{bootGB: 30, codeGB: 50, now: now, runHours: 73})
+	if !strings.Contains(out.String(), "no compute price for e2-standard-4 in us-east1") {
+		t.Errorf("unknown region not flagged:\n%s", out.String())
 	}
 }

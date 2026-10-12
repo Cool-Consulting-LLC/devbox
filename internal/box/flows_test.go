@@ -528,3 +528,19 @@ func TestForeignResourcesAreLeftAlone(t *testing.T) {
 		t.Fatalf("status: %v", err)
 	}
 }
+
+func TestStatusCost(t *testing.T) {
+	e := setup(t)
+	e.f.instances["devbox"] = &compute.Instance{Name: "devbox", Zone: "zones/europe-west4-a", Status: "RUNNING",
+		Labels: map[string]string{"devbox": "devbox"}, MachineType: "zones/europe-west4-a/machineTypes/e2-standard-4"}
+	e.f.uptimeSecs = []float64{3600, 7200}
+	var out strings.Builder
+	if err := e.b.Status(e.ctx, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"3.0 h running", "per month running", "$120.95", "per month suspended", "$12.32"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+}
