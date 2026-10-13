@@ -14,5 +14,8 @@ if [ $# -gt 0 ] && [[ $1 != -* ]]; then
 fi
 cfg=${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}
 mkdir -p "$cfg"
-echo "logging in $cfg"
-gcloud auth login --no-launch-browser --update-adc "$@"
+# --quiet takes the default at every prompt (VM warning, overwrite, ADC env
+# var); the verification code is still read. --brief and --verbosity drop the
+# chatter but not the URL, which shares stderr with it.
+gcloud auth login --no-launch-browser --update-adc \
+  --quiet --brief --verbosity=error "$@"
