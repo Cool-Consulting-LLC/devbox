@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"os/user"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -96,6 +97,7 @@ did not create admits the internet (see ` + "`devbox preflight`" + `), unless
 				return err
 			}
 			header(b, "up")
+			fmt.Printf("at %s\n", time.Now().Format("2006-01-02 15:04:05 MST"))
 			if err := exposureGuard(ctx, b, allowExposure); err != nil {
 				return err
 			}

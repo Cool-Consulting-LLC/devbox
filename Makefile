@@ -8,6 +8,7 @@ LDFLAGS := -s -w -X github.com/Cool-Consulting-LLC/devbox/internal/cli.Version=$
 # else installed. -trimpath keeps the builder's home directory out of it.
 GOBUILD := CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)"
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64 linux/arm64
+PREFIX ?= $(HOME)/.local
 
 # Everything that runs on the box. Linted here as well as by the Go tests, so
 # `make lint` names the file and line rather than a test. No -s: each file
@@ -77,9 +78,14 @@ diff-dotfiles: ## Diff the box's dotfiles against the originals in $(DOTFILES)
 
 ##@ Build
 
-.PHONY: build release clean
+.PHONY: build install release clean
 build: ## Build the static binary at ./devbox
 	$(GOBUILD) -o devbox ./cmd/devbox
+
+install: build ## Copy ./devbox to $(PREFIX)/bin (override with PREFIX=...)
+	install -d $(PREFIX)/bin
+	install -m 0755 devbox $(PREFIX)/bin/devbox
+	@case ":$$PATH:" in *":$(PREFIX)/bin:"*) ;; *) echo "note: $(PREFIX)/bin is not on PATH";; esac
 
 release: ## Build dist/devbox-<os>-<arch> for $(PLATFORMS)
 	@set -euo pipefail; \
