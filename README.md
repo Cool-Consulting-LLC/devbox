@@ -4,13 +4,29 @@ A Claude Code workstation in your own GCP project, reachable over your tailnet, 
 
 ## Overview
 
-`devbox` makes a GCP project match `devbox.yaml`: an Ubuntu VM you reach over Tailscale SSH or mosh, with Claude Code, `gh`, Terraform, Go, Node, uv, ruff and pytest installed. Your work lives on `/srv/code`, a separate disk that is snapshotted daily and survives rebuilds. The box suspends itself after an hour idle and keeps its memory, so tmux and Claude Code sessions survive. It costs about $12 a month while suspended; `./devbox status` estimates the rest.
+`devbox` makes a GCP project match `devbox.yaml`: an Ubuntu VM you reach over Tailscale SSH or mosh, with Claude Code, `gh`, Terraform, Go, Node, uv, ruff and pytest installed. Your work lives on `/srv/code`, a separate disk that is snapshotted daily and survives rebuilds. The box suspends itself after an hour idle and keeps its memory, so tmux and Claude Code sessions survive. It costs about $12 a month while suspended and about 15¢ an hour while running; see [Costs](#costs).
 
 A dedicated SSH key in Secret Manager authenticates to GitHub and signs commits. Nobody has sudo on the box, and agents are denied `git commit`, `git push` and applies.
 
 ### Security
 
 `devbox` is for one person in a GCP project of their own. It is not a sandbox. Agents run as you, so they can use anything you can: the machine key, project secrets, and any gcloud login on the box. The deny rules stop accidents, not a determined or prompt-injected agent. Give the machine key as little reach as you can (a machine user or deploy keys), and protect your branches.
+
+### Costs
+
+Approximate monthly costs for the example `devbox.yaml` (e2-standard-4 in europe-west4, 80 GB of disk, external IP), at on-demand prices:
+
+| | Per month |
+|---|---|
+| Disks, always | $9.60 |
+| Memory while suspended, all month | $2.70 |
+| Compute while running, all month | $108 |
+| External IP while running, all month | $3.65 |
+| **Suspended all month** | **about $12** |
+| **Running 8 hours a weekday** | **about $40** |
+| **Running all month** | **about $120** |
+
+Running costs about 15¢ an hour. The total also includes snapshots, usually a few dollars, depending on how much `/srv/code` changes. Secret Manager and logging are usually pennies. Other regions cost up to about 20% more, and an e2-standard-N machine costs N/4 times the compute line. `./devbox status` estimates your box's costs from its actual uptime. Check the billing console for the real figure.
 
 ## How to set it up
 
