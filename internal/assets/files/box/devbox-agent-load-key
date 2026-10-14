@@ -1,0 +1,23 @@
+#!/bin/bash
+# devbox-agent-load-key: put the machine key into the root ssh-agent if it is
+# empty. The key exists only in the agent's memory, so every start of
+# devbox-ssh-agent.service runs this (devbox-ssh-agent.conf), and so does
+# provision.sh. On first boot, before provision.sh has written the config,
+# there is nothing to do: provision.sh loads the key itself.
+set -euo pipefail
+export SSH_AUTH_SOCK=/run/devbox-agent/agent.sock
+[ -r /run/devbox/config.env ] || exit 0
+# shellcheck source=/dev/null
+. /run/devbox/config.env
+
+# ExecStartPost runs as soon as ssh-agent is forked, maybe before its socket exists.
+for _ in $(seq 50); do [ -S "$SSH_AUTH_SOCK" ] && break; sleep 0.1; done
+ssh-add -l >/dev/null 2>&1 && exit 0
+
+# After a restart the network may still be coming up: retry the fetch.
+for i in 1 2 3 4 5; do
+  devbox-secret "$DEVBOX_SSH_KEY_SECRET" | ssh-add -q - && exit 0
+  sleep $((i * 2))
+done
+echo "devbox-agent-load-key: could not load $DEVBOX_SSH_KEY_SECRET into the agent" >&2
+exit 1

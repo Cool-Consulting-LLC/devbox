@@ -212,11 +212,10 @@ release_bin ruff 0.17.0 \
   ruff
 
 step ssh-agent
-export SSH_AUTH_SOCK=/run/devbox-agent/agent.sock
-if ! ssh-add -l >/dev/null 2>&1; then
-  devbox-secret "$DEVBOX_SSH_KEY_SECRET" | ssh-add -
-fi
-pubkey=$(ssh-add -L | head -n1)
+# Picks up the drop-in that reloads the key whenever the agent restarts.
+systemctl daemon-reload
+devbox-agent-load-key
+pubkey=$(SSH_AUTH_SOCK=/run/devbox-agent/agent.sock ssh-add -L | head -n1)
 # Admins reach the agent through the relay; pick up any change to its script.
 systemctl restart devbox-ssh-agent-relay.service
 
