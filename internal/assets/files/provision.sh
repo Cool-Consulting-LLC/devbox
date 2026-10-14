@@ -178,7 +178,7 @@ if [ "$need_update" = 1 ] || [ -z "$(find /var/lib/apt/lists -maxdepth 0 -mmin -
   apt_get update -q
 fi
 # shellcheck disable=SC2086
-apt_get install -y -q acl claude-code gh golang-go nodejs npm python3-pytest ruby-bundler tailscale terraform $DEVBOX_EXTRA_PACKAGES
+apt_get install -y -q acl claude-code gh golang-go nodejs npm python3-pytest ruby-bundler ruby-dev tailscale terraform $DEVBOX_EXTRA_PACKAGES
 
 # release_bin NAME VERSION SHA256_X86_64 SHA256_AARCH64 BIN...: install BINs to
 # /usr/local/bin from Astral's GitHub release tarball for NAME. uv and ruff are
