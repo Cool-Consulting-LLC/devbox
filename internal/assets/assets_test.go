@@ -219,6 +219,80 @@ func TestStatusLine(t *testing.T) {
 	}
 }
 
+func TestGcloudAdopt(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not installed")
+	}
+	dir := t.TempDir()
+	write := func(p, s string, mode os.FileMode) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := filepath.Join(dir, "devbox-gcloud-adopt")
+	write(p, read("box/devbox-gcloud-adopt"), 0o755)
+	// A fake gcloud records the config and token it was given; "1//bad" fails.
+	write(filepath.Join(dir, "bin/gcloud"), `#!/bin/bash
+read -r tok
+[ "$tok" = 1//bad ] && { echo "Refresh token: ERROR: invalid_grant" >&2; exit 1; }
+echo "$*" "$tok" > "$CLOUDSDK_CONFIG/activated"
+`, 0o755)
+	root := filepath.Join(dir, "gcloud")
+	write(filepath.Join(root, "cc/legacy_credentials/me@example.com/adc.json"), "{}", 0o600)
+	write(filepath.Join(root, "cc/application_default_credentials.json"), `{"refresh_token":"old","quota_project_id":"box-proj"}`, 0o600)
+	write(filepath.Join(root, "client/legacy_credentials/me@client.com/adc.json"), "{}", 0o600)
+	write(filepath.Join(root, "client/application_default_credentials.json"), `{"refresh_token":"client"}`, 0o600)
+	run := func(stdin string) (string, error) {
+		c := exec.Command(p, "me@example.com")
+		c.Stdin = strings.NewReader(stdin)
+		c.Env = []string{"PATH=" + filepath.Join(dir, "bin") + ":" + os.Getenv("PATH"), "DEVBOX_GCLOUD_DIR=" + root}
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+	adc := func(tok string) string {
+		return `{"type":"authorized_user","client_id":"32555940559.apps.googleusercontent.com","refresh_token":"` + tok + `","quota_project_id":"laptop-proj"}`
+	}
+	readADC := func(cfg string) map[string]string {
+		t.Helper()
+		var m map[string]string
+		b, _ := os.ReadFile(filepath.Join(root, cfg, "application_default_credentials.json"))
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+
+	// Only the config logged in as the account changes; its quota project stays.
+	out, err := run(adc("1//new"))
+	if err != nil || !strings.Contains(out, "cc: me@example.com logged in, CLI and ADC") {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if m := readADC("cc"); m["refresh_token"] != "1//new" || m["quota_project_id"] != "box-proj" {
+		t.Errorf("cc ADC: %v", m)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "cc/activated")); string(b) != "auth activate-refresh-token me@example.com 1//new\n" {
+		t.Errorf("cc CLI: %q", b)
+	}
+	if m := readADC("client"); m["refresh_token"] != "client" {
+		t.Errorf("client ADC changed: %v", m)
+	}
+	// A token the CLI rejects leaves ADC alone too.
+	if out, err := run(adc("1//bad")); err != nil || !strings.Contains(out, "rejected") {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if m := readADC("cc"); m["refresh_token"] != "1//new" {
+		t.Errorf("cc ADC after a bad token: %v", m)
+	}
+	// Not a user login: refused.
+	if _, err := run(`{"type":"service_account"}`); err == nil {
+		t.Error("service account accepted")
+	}
+}
+
 func TestConfigEnvQuotes(t *testing.T) {
 	c := config.Defaults()
 	c.ProjectID = "p-123456"

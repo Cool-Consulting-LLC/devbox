@@ -16,7 +16,7 @@ PREFIX ?= $(HOME)/.local
 # checked separately. assets_test.go fails if a box file is in neither list.
 BOX := $(GITROOT)/internal/assets/files/box
 SCRIPTS := $(sort $(wildcard $(GITROOT)/internal/assets/files/*.sh) \
-             $(addprefix $(BOX)/,claude-activity.sh devbox-agent-load-key devbox-claude-statusline devbox-enroll devbox-gcloud-login devbox-project devbox-secret devbox-sessions devbox-tmux-colour guard.sh idle-check.sh mosh-server profile.sh skel/.bashrc))
+             $(addprefix $(BOX)/,claude-activity.sh devbox-agent-load-key devbox-claude-statusline devbox-enroll devbox-gcloud-adopt devbox-gcloud-login devbox-project devbox-secret devbox-sessions devbox-tmux-colour guard.sh idle-check.sh mosh-server profile.sh skel/.bashrc))
 PYTHON := $(BOX)/devbox-agent-relay
 
 # Where the originals of the ported dotfiles live: your laptop's home.

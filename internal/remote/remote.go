@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type Target struct {
@@ -61,6 +62,32 @@ func (t Target) Run(ctx context.Context, cmd string, stdin io.Reader) error {
 		return fmt.Errorf("%s: %w", how, err)
 	}
 	return nil
+}
+
+// WaitReachable retries a no-op SSH until it connects or timeout passes: a box
+// just resumed takes a few seconds to be back on the tailnet.
+func (t Target) WaitReachable(ctx context.Context, timeout time.Duration) error {
+	if t.Local || t.IAP {
+		return nil
+	}
+	dest := t.Host
+	if t.User != "" {
+		dest = t.User + "@" + t.Host
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		out, err := exec.CommandContext(ctx, "ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", "--", dest, "true").CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return fmt.Errorf("ssh %s: %w: %s", t.Host, err, strings.TrimSpace(string(out)))
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(3 * time.Second):
+		}
+	}
 }
 
 var safeWord = regexp.MustCompile(`^[A-Za-z0-9_./=:@%+,-]+$`)

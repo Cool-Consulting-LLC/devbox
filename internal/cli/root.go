@@ -30,7 +30,7 @@ func Execute() int {
 	if err := newRoot().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "devbox:", err)
 		if gcp.NeedsLogin(err) {
-			fmt.Fprintln(os.Stderr, "devbox: your Google login expired; run `gcloud auth application-default login` and retry")
+			fmt.Fprintln(os.Stderr, "devbox: your Google login expired; run `make auth` (gcloud auth login --update-adc) and retry")
 		}
 		return 1
 	}

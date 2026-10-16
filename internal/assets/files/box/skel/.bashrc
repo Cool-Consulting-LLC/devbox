@@ -70,6 +70,12 @@ gp() { git push "$@"; }
 gt() { git tag "v$(< VERSION)" && sleep 2 && git push origin "v$(< VERSION)"; }
 
 alias tl='tmux list-sessions'
+# Sessions in columns: ● attached (green), windows, last activity. Coloured
+# after column(1), which would count the escape codes as width.
+ts() {
+  tmux list-sessions -F '#{?session_attached,●, } #{session_name}	#{session_windows}w	#{t/p:session_activity}' 2>/dev/null \
+    | column -t -s $'\t' | sed $'s/●/\e[32m●\e[0m/'
+}
 # Attach to the session whose name ends in $1: `ta api` finds acme-api.
 ta() { tmux attach -t "*$1"; }
 
@@ -101,5 +107,5 @@ PS1='\[\e[32m\]\u@\[\e[38;5;${hostnamecolor}m\]\h \[\e[32m\]\w \[\e[33m\]$(_bran
 if [ -z "${TMUX:-}" ]; then
   uptime
   echo
-  tmux list-sessions 2>/dev/null
+  ts
 fi

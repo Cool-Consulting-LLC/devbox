@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"os/user"
 	"strings"
@@ -75,7 +77,7 @@ func exposureGuard(ctx context.Context, b *box.Box, allow bool) error {
 }
 
 func upCmd(g *globals) *cobra.Command {
-	var allowExposure bool
+	var allowExposure, shareLogin bool
 	cmd := &cobra.Command{
 		Use:   "up",
 		Short: "Create what is missing, resume if suspended",
@@ -87,7 +89,12 @@ change that would, up says so and leaves it for ` + "`devbox apply`." + `
 
 up refuses to run while the box has an external IP and a firewall rule devbox
 did not create admits the internet (see ` + "`devbox preflight`" + `), unless
---allow-exposure.`,
+--allow-exposure.
+
+From the laptop, up then passes your Google login to the box: every gcloud
+config there logged in as the same account gets it, CLI login and ADC. One
+` + "`make auth`" + ` after a reauthentication then covers the box too.
+--share-login=false skips it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
@@ -120,11 +127,47 @@ did not create admits the internet (see ` + "`devbox preflight`" + `), unless
 			} else if p.NeedsReprovision {
 				fmt.Println("\nMetadata changed: run `devbox reprovision` to apply it on the box.")
 			}
+			// A new box has no account for you yet, and on the box the
+			// login is the box's own already.
+			if shareLogin && !created && !onBox(b.C.Name) {
+				if err := adoptLogin(ctx, b); err != nil {
+					fmt.Fprintf(os.Stderr, "could not pass your login to the box: %v\n", err)
+				}
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&allowExposure, "allow-exposure", false, "go ahead even if firewall rules open the box to the internet")
+	cmd.Flags().BoolVar(&shareLogin, "share-login", true, "pass your Google login to the box's gcloud configs for the same account")
 	return cmd
+}
+
+// adoptLogin gives the box the laptop's Google login, so the reauthentication
+// that let up run covers the box's gcloud configs for the same account too. It
+// does nothing unless the credentials are a user login.
+func adoptLogin(ctx context.Context, b *box.Box) error {
+	js := b.G.UserCredentialJSON()
+	if js == nil {
+		return nil
+	}
+	email, err := b.G.CallerEmail(ctx)
+	if err != nil {
+		return err
+	}
+	t, err := (&remoteFlags{}).target(ctx, b)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\npassing your login (%s) to the box ...\n", email)
+	if err := t.WaitReachable(ctx, 90*time.Second); err != nil {
+		return err
+	}
+	err = t.Run(ctx, remote.Join("devbox-gcloud-adopt", email), bytes.NewReader(js))
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 127 {
+		return errors.New("the box has no devbox-gcloud-adopt yet; run `devbox reprovision`, then `devbox up` again")
+	}
+	return err
 }
 
 func downCmd(g *globals) *cobra.Command {

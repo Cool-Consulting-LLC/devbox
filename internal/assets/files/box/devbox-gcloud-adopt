@@ -1,0 +1,49 @@
+#!/bin/bash
+# devbox-gcloud-adopt ACCOUNT < application_default_credentials.json
+# Box-side half of `devbox up`: takes the laptop's fresh login for ACCOUNT and
+# installs it, CLI login and ADC, in every gcloud config on the box already
+# logged in as ACCOUNT. One browser round trip on the laptop then covers both.
+set -euo pipefail
+die() { echo "devbox-gcloud-adopt: $*" >&2; exit 1; }
+
+account=${1:?account}
+[[ $account =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] || die "bad account $account"
+adc=$(jq -ce 'select(.type == "authorized_user" and (.refresh_token | length > 0))') \
+  || die "stdin is not an authorized_user credential"
+# `gcloud auth login --update-adc` writes ADC with the CLI's own OAuth client, so
+# its refresh token works for the CLI too. One from `application-default login`
+# does not.
+cli_client=32555940559.apps.googleusercontent.com
+same_client=$(jq -r --arg c "$cli_client" '.client_id == $c' <<<"$adc")
+
+shopt -s nullglob
+found=0
+# DEVBOX_GCLOUD_DIR is for tests.
+for cfg in "${DEVBOX_GCLOUD_DIR:-/srv/code/.gcloud}"/*/; do
+  cfg=${cfg%/} name=$(basename "$cfg")
+  [ -e "$cfg/legacy_credentials/$account" ] || continue
+  found=1
+  if [ "$same_client" = true ]; then
+    # Not --quiet: then it will not read the token from stdin. It checks the
+    # token before storing it; its only output is the prompt and errors.
+    if ! err=$(jq -r .refresh_token <<<"$adc" \
+        | CLOUDSDK_CONFIG=$cfg gcloud auth activate-refresh-token "$account" 2>&1 >/dev/null); then
+      err=$(sed -n '1s/^Refresh token: //p' <<<"$err")
+      echo "  $name: the CLI rejected the token, left as it was: $err" >&2
+      continue
+    fi
+  fi
+  # Keep the box's quota project: the laptop's may name a different one.
+  f=$cfg/application_default_credentials.json
+  quota=$(jq -r '.quota_project_id // empty' "$f" 2>/dev/null || true)
+  tmp=$(mktemp "$f.XXXX")
+  jq --arg q "$quota" 'del(.quota_project_id) + (if $q == "" then {} else {quota_project_id: $q} end)' \
+    <<<"$adc" > "$tmp"
+  chmod 600 "$tmp"; mv "$tmp" "$f"
+  if [ "$same_client" = true ]; then
+    echo "  $name: $account logged in, CLI and ADC"
+  else
+    echo "  $name: $account logged in, ADC only (log in on the laptop with \`make auth\` to cover the CLI too)"
+  fi
+done
+[ "$found" = 1 ] || echo "  no gcloud config on the box is logged in as $account; log one in once with devbox-gcloud-login"

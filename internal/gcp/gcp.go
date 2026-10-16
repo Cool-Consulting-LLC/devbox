@@ -3,6 +3,7 @@ package gcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -116,6 +117,22 @@ func (c *Clients) CallerEmail(ctx context.Context) (string, error) {
 		return "", errors.New("credentials carry no email; re-run `gcloud auth application-default login`")
 	}
 	return info.Email, nil
+}
+
+// UserCredentialJSON is the laptop's login as an authorized_user ADC file, or nil
+// when the credentials are anything else: a service account, impersonation, or
+// the metadata server.
+func (c *Clients) UserCredentialJSON() []byte {
+	if c.creds == nil || len(c.creds.JSON) == 0 {
+		return nil
+	}
+	var f struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(c.creds.JSON, &f) != nil || f.Type != "authorized_user" {
+		return nil
+	}
+	return c.creds.JSON
 }
 
 // Code returns the HTTP status of a Google API error, or 0.
