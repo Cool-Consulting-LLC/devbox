@@ -25,6 +25,9 @@ import (
 
 const scope = "https://www.googleapis.com/auth/cloud-platform"
 
+// ErrNoCredentials means there is no Google login at all.
+var ErrNoCredentials = errors.New("no Google credentials")
+
 // Clients is every API the binary speaks. Credentials come from Application Default
 // Credentials: run `gcloud auth application-default login` once on the laptop.
 type Clients struct {
@@ -45,7 +48,7 @@ type Clients struct {
 func New(ctx context.Context, project string) (*Clients, error) {
 	creds, err := google.FindDefaultCredentials(ctx, scope, "https://www.googleapis.com/auth/userinfo.email")
 	if err != nil {
-		return nil, fmt.Errorf("no Google credentials: run `gcloud auth application-default login` (%w)", err)
+		return nil, fmt.Errorf("%w: run `gcloud auth application-default login` (%w)", ErrNoCredentials, err)
 	}
 	c, err := newClients(ctx, project, func(string) []option.ClientOption {
 		return []option.ClientOption{option.WithCredentials(creds), option.WithQuotaProject(project)}
@@ -96,6 +99,18 @@ func newClients(ctx context.Context, project string, opts func(svc string) []opt
 	return c, nil
 }
 
+// CheckLogin mints a token, so an expired login fails here rather than halfway
+// through a command.
+func (c *Clients) CheckLogin() error {
+	if c.creds == nil {
+		return nil
+	}
+	if _, err := c.creds.TokenSource.Token(); err != nil {
+		return fmt.Errorf("cannot mint a token: %w", err)
+	}
+	return nil
+}
+
 // CallerEmail is the account the binary is acting as.
 func (c *Clients) CallerEmail(ctx context.Context) (string, error) {
 	if c.email != "" {
@@ -144,12 +159,16 @@ func Code(err error) int {
 	return 0
 }
 
-// NeedsLogin reports whether err means the laptop's credentials expired or were
-// revoked, e.g. by a Workspace reauthentication policy (invalid_rapt). It matches
-// on text because the token error reaches callers through several wrappers.
+// NeedsLogin reports whether err means the laptop's credentials are missing,
+// expired or revoked, e.g. by a Workspace reauthentication policy (invalid_rapt).
+// It matches on text because the token error reaches callers through several
+// wrappers.
 func NeedsLogin(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, ErrNoCredentials) {
+		return true
 	}
 	s := err.Error()
 	return strings.Contains(s, "invalid_grant") || strings.Contains(s, "invalid_rapt") ||

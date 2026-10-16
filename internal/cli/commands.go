@@ -91,15 +91,17 @@ up refuses to run while the box has an external IP and a firewall rule devbox
 did not create admits the internet (see ` + "`devbox preflight`" + `), unless
 --allow-exposure.
 
+If your Google login is missing or expired, up first runs
+` + "`gcloud auth login --update-adc`" + `, as ` + "`make auth`" + ` does, when at a terminal.
 From the laptop, up then passes your Google login to the box: every gcloud
-config there logged in as the same account gets it, CLI login and ADC. One
-` + "`make auth`" + ` after a reauthentication then covers the box too.
+config there logged in as the same account gets it, CLI login and ADC, so one
+login covers both.
 --share-login=false skips it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}

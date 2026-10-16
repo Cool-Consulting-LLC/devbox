@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -83,6 +84,39 @@ func (g *globals) load(ctx context.Context) (*box.Box, error) {
 		return nil, err
 	}
 	return box.New(c, cl, os.Stdout), nil
+}
+
+// loadLoggedIn is load, except that when the Google login is missing or expired
+// and someone is at the terminal, it runs `gcloud auth login --update-adc` (what
+// `make auth` runs) and tries again.
+func (g *globals) loadLoggedIn(ctx context.Context) (*box.Box, error) {
+	b, err := g.loadChecked(ctx)
+	if !gcp.NeedsLogin(err) || !term.IsTerminal(int(os.Stdin.Fd())) {
+		return b, err
+	}
+	fmt.Fprintln(os.Stderr, "devbox: your Google login is missing or expired; logging in again")
+	args := []string{"auth", "login", "--update-adc"}
+	if c, cerr := config.Load(g.configPath); cerr == nil && onBox(c.Name) {
+		args = append(args, "--no-launch-browser") // no browser on the box
+	}
+	login := exec.CommandContext(ctx, "gcloud", args...)
+	login.Stdin, login.Stdout, login.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := login.Run(); err != nil {
+		return nil, fmt.Errorf("gcloud auth login: %w", err)
+	}
+	return g.loadChecked(ctx)
+}
+
+// loadChecked is load, failing now if the login cannot mint a token.
+func (g *globals) loadChecked(ctx context.Context) (*box.Box, error) {
+	b, err := g.load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.G.CheckLogin(); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 func header(b *box.Box, verb string) {

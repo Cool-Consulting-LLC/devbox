@@ -106,7 +106,7 @@ mosh you@devbox -- ta main                    # or: ssh you@devbox
 
 If `ssh` hangs, the box has suspended itself: run `./devbox up`.
 
-When your Google login expires, run `make auth` on the laptop, then `./devbox up`. `up` passes the fresh login to every gcloud config on the box that is logged in as the same account, so you don't log in there again. Configs for other accounts still need `devbox-gcloud-login` on the box. The box needs `devbox-gcloud-adopt`, so run `./devbox reprovision` once after updating.
+When your Google login expires, `./devbox up` logs you in again first, as `make auth` does. It then passes the fresh login to every gcloud config on the box that is logged in as the same account, so you don't log in there again. Configs for other accounts still need `devbox-gcloud-login` on the box. The box needs `devbox-gcloud-adopt`, so run `./devbox reprovision` once after updating.
 
 ### Projects
 
