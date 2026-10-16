@@ -283,6 +283,15 @@ for u in "${docker_users[@]}"; do
   systemctl --user -M "$u@" daemon-reload &&
     systemctl --user -M "$u@" start docker.service ||
     echo "WARNING: rootless Docker did not start for $u" >&2
+  # profile.sh's DOCKER_HOST reaches login shells only; a context in
+  # ~/.docker/config.json reaches every docker client, Claude Code's shells too.
+  home=$(getent passwd "$u" | cut -d: -f6) || continue
+  runuser -u "$u" -- env HOME="$home" sh -c '
+    sock="unix:///run/user/$(id -u)/docker.sock"
+    docker context inspect rootless >/dev/null 2>&1 ||
+      docker context create rootless --description "devbox rootless daemon" --docker "host=$sock" >/dev/null
+    docker context use rootless >/dev/null' ||
+    echo "WARNING: could not set the rootless Docker context for $u" >&2
 done
 
 step ssh-agent
