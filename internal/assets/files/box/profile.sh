@@ -1,6 +1,8 @@
 # shellcheck shell=sh
 # /etc/profile.d/devbox.sh, written by provision.sh. Applies to every login.
 export SSH_AUTH_SOCK=/run/devbox/ssh-agent.sock
+# Your own rootless Docker daemon; there is no system one.
+[ "$(id -u)" = 0 ] || export DOCKER_HOST="unix:///run/user/$(id -u)/docker.sock"
 
 # Nobody has sudo on the box except for devbox-enroll, which sets up an OS
 # Login admin: home directory (sshd's PAM creates it, Tailscale SSH does not,

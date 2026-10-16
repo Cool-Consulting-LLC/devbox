@@ -1,0 +1,11 @@
+# /etc/apparmor.d/usr.bin.rootlesskit, written by provision.sh. Ubuntu denies
+# unprivileged user namespaces unless a profile allows them; rootless Docker
+# needs one, and docker-ce-rootless-extras does not ship it.
+abi <abi/4.0>,
+include <tunables/global>
+
+"/usr/bin/rootlesskit" flags=(unconfined) {
+  userns,
+
+  include if exists <local/usr.bin.rootlesskit>
+}

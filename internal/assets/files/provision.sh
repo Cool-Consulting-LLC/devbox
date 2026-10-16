@@ -119,9 +119,22 @@ revoke() {
   find /srv/code -maxdepth 1 ! -name .devbox ! -name lost+found ! -type l \
     -exec setfacl -R -P -x "u:$1" -x "d:u:$1" {} + 2>/dev/null || true
   rm -f "/srv/code/.devbox/enrolled/$1"
+  sed -i "/^$1:/d" /etc/subuid /etc/subgid 2>/dev/null || true
   echo "revoked uid $1: no longer an OS Login admin"
 }
+# subids UID: give UID 65536 subordinate uids and gids, for rootless Docker.
+# OS Login users are not in /etc/passwd, so usermod cannot; each new range
+# starts above every existing one.
+subids() {
+  local f start
+  for f in /etc/subuid /etc/subgid; do
+    grep -qs "^$1:" "$f" && continue
+    start=$(awk -F: 'BEGIN{m=100000} {if($2+$3>m)m=$2+$3} END{print m}' "$f" 2>/dev/null) || start=100000
+    echo "$1:$start:65536" >> "$f"
+  done
+}
 sudo_uids=()
+docker_users=()
 for m in /srv/code/.devbox/enrolled/*; do
   [ -e "$m" ] || continue
   uid=$(basename "$m")
@@ -138,6 +151,8 @@ for m in /srv/code/.devbox/enrolled/*; do
   loginctl enable-linger "$user" || true   # see devbox-enroll: tmux must outlive sessions
   operator=${operator:-$user}
   sudo_uids+=("$uid")
+  subids "$uid"
+  docker_users+=("$user")
   # The check above is about file order; this one is about the outcome.
   if runuser -u "$user" -- sudo -n true 2>/dev/null; then
     echo "WARNING: $user can still sudo; agents running as $user can too" >&2
@@ -211,13 +226,18 @@ apt_repo hashicorp https://apt.releases.hashicorp.com/gpg \
   /etc/apt/keyrings/hashicorp-archive-keyring.asc \
   "https://apt.releases.hashicorp.com ${VERSION_CODENAME} main" \
   D55C0D1AC78A8D8126CB631CFC9CA96ACA026560
+apt_repo docker https://download.docker.com/linux/ubuntu/gpg /etc/apt/keyrings/docker.asc \
+  "https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+  9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 
 # Refresh at most daily otherwise, so a reprovision stays quick.
 if [ "$need_update" = 1 ] || [ -z "$(find /var/lib/apt/lists -maxdepth 0 -mmin -1440 2>/dev/null)" ]; then
   apt_get update -q
 fi
 # shellcheck disable=SC2086
-apt_get install -y -q acl claude-code gh golang-go nodejs npm python3-pytest ruby-bundler ruby-dev tailscale terraform $DEVBOX_EXTRA_PACKAGES
+apt_get install -y -q acl claude-code gh golang-go nodejs npm python3-pytest ruby-bundler ruby-dev tailscale terraform \
+  docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin uidmap slirp4netns \
+  $DEVBOX_EXTRA_PACKAGES
 
 # release_bin NAME VERSION SHA256_X86_64 SHA256_AARCH64 BIN...: install BINs to
 # /usr/local/bin from Astral's GitHub release tarball for NAME. uv and ruff are
@@ -249,6 +269,21 @@ release_bin ruff 0.17.0 \
   c94fc1dc71f054d06d9f1149442dcb471516aa2b7d4b7e8124e05d082d4c91d3 \
   294e181ba6ccb0c2ffd778580e3c42b19f038bdbcb844f39fd9a6a26e8148804 \
   ruff
+
+step docker
+# Rootless only: see docker-rootless.service. The packages start a root daemon;
+# stop it, and keep its socket, which docker-group members could use, unmade.
+systemctl disable --now docker.socket docker.service containerd.service 2>/dev/null || true
+systemctl mask docker.socket docker.service containerd.service
+rm -f /run/docker.sock   # left by the socket unit, which does not remove it on stop
+apparmor_parser -r /etc/apparmor.d/usr.bin.rootlesskit
+systemctl --global enable docker.service
+# Lingering admins' user managers are already up; start their daemons now.
+for u in "${docker_users[@]}"; do
+  systemctl --user -M "$u@" daemon-reload &&
+    systemctl --user -M "$u@" start docker.service ||
+    echo "WARNING: rootless Docker did not start for $u" >&2
+done
 
 step ssh-agent
 # Picks up the drop-in that reloads the key whenever the agent restarts.

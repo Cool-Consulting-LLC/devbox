@@ -50,6 +50,8 @@ var boxFiles = []boxFile{
 	{"box/idle-check.sh", "/usr/local/sbin/devbox-idle-check", "0755"},
 	{"box/profile.sh", "/etc/profile.d/devbox.sh", "0644"},
 	{"box/tmux.conf", "/etc/tmux.conf", "0644"},
+	{"box/docker-rootless.service", "/etc/systemd/user/docker.service", "0644"},
+	{"box/rootlesskit.apparmor", "/etc/apparmor.d/usr.bin.rootlesskit", "0644"},
 	{"box/skel/.bashrc", "/etc/skel/.bashrc", "0644"},
 	{"box/skel/.gitconfig", "/etc/skel/.gitconfig", "0644"},
 	{"box/skel/.ssh/config", "/etc/skel/.ssh/config", "0600"},
