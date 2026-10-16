@@ -183,7 +183,7 @@ After 60 days suspended, Compute Engine stops the instance and memory is lost.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}
@@ -216,7 +216,7 @@ func statusCmd(g *globals) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}
@@ -376,7 +376,7 @@ hour before the re-run; use it with --iap, since the tailnet is what is missing.
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}
