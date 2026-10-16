@@ -10,8 +10,9 @@
 #   - directory (project name cut to its last 7 characters) and git state, or
 #     at a project root that is not a repo, how many repos it holds and how
 #     many have changes
-#   - RC, while Remote Control is connected: Claude Code sets
-#     CLAUDE_CODE_BRIDGE_SESSION_ID for exactly that long, and this inherits it
+#   - RC: green while Remote Control is connected, red while it is off.
+#     Claude Code sets CLAUDE_CODE_BRIDGE_SESSION_ID for exactly as long as
+#     it is connected, and this inherits it
 #   - in a project session on the box: the gcloud config, project and region
 #     that `devbox project` gave the session
 #   - whether Application Default Credentials exist in that gcloud config,
@@ -100,8 +101,13 @@ else
 fi
 segments+=("$seg")
 
-# Remote Control: the session can be driven from claude.ai or the phone.
-[ -n "${CLAUDE_CODE_BRIDGE_SESSION_ID:-}" ] && segments+=("${GREEN}RC${RESET}")
+# Remote Control: green when the session can be driven from claude.ai or the
+# phone, red when it cannot.
+if [ -n "${CLAUDE_CODE_BRIDGE_SESSION_ID:-}" ]; then
+  segments+=("${GREEN}RC${RESET}")
+else
+  segments+=("${RED}RC${RESET}")
+fi
 
 # Box, project session: the identity `devbox project` gave this session.
 # CLOUDSDK_CONFIG is the gcloud config directory, so its name is the identity.

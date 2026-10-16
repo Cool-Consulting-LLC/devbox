@@ -215,8 +215,12 @@ func TestStatusLine(t *testing.T) {
 			t.Errorf("missing %q in %q", want, out)
 		}
 	}
-	if strings.Contains(out, "no ADC") || strings.Contains(out, "RC") || strings.Contains(out, "12%\x1b[0m \x1b") {
+	if strings.Contains(out, "no ADC") || strings.Contains(out, "12%\x1b[0m \x1b") {
 		t.Errorf("unexpected segment in %q", out)
+	}
+	// Remote Control off.
+	if !strings.Contains(out, "\x1b[31mRC\x1b[0m") {
+		t.Errorf("remote control off: %q", out)
 	}
 	// Remote Control connected.
 	if out := run("{}", "CLAUDE_CODE_BRIDGE_SESSION_ID=session_x"); !strings.Contains(out, "\x1b[32mRC\x1b[0m") {
