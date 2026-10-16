@@ -30,7 +30,11 @@ func (b *Box) SecretExists(ctx context.Context, id string) (bool, error) {
 // Secrets are existence-only: the binary never creates the ones the box needs,
 // because only you hold their contents. It checks for them.
 func (b *Box) checkSecrets(ctx context.Context, p *Plan) error {
-	for _, id := range []string{b.C.Tailscale.OAuthSecret, b.C.SSHKey.Secret} {
+	ids := []string{b.C.Tailscale.OAuthSecret, b.C.SSHKey.Secret}
+	if b.C.Sudo.PasswordSecret != "" {
+		ids = append(ids, b.C.Sudo.PasswordSecret)
+	}
+	for _, id := range ids {
 		ok, err := b.SecretExists(ctx, id)
 		if err != nil {
 			return fmt.Errorf("secret %s: %w", id, err)

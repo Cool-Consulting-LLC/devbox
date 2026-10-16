@@ -70,6 +70,7 @@ func TestRejects(t *testing.T) {
 		"idle vs high":    minimal + "alerts: {cpu_idle_pct: 90, cpu_high_pct: 80}",
 		"bad zone":        minimal + "zone: frankfurt",
 		"bad package":     minimal + "extra_packages: ['rm -rf /']",
+		"bad sudo secret": minimal + "sudo: {password_secret: 'a/b'}",
 	}
 	for name, y := range cases {
 		if _, err := Parse([]byte(y)); err == nil {
@@ -88,6 +89,7 @@ func TestAccepts(t *testing.T) {
 		minimal + "external_ip: false\nidle_suspend: {enabled: false}",
 		minimal + "extra_packages: [nodejs, python3-venv, golang-1.22]",
 		minimal + "tailscale: {oauth_secret: ts-oauth}", // any secret ID: access is granted per secret
+		minimal + "sudo: {password_secret: devbox-sudo-password-hash}",
 	} {
 		if _, err := Parse([]byte(y)); err != nil {
 			t.Errorf("rejected %q: %v", y, err)

@@ -27,6 +27,9 @@ tailscale:
 ssh_key:
   secret: devbox-ssh-key                 # Secret Manager name
 
+sudo:
+  password_secret: ""                    # e.g. devbox-sudo-password-hash; empty means no sudo
+
 snapshots:
   start_time: "03:00"            # UTC
   retention_days: 14

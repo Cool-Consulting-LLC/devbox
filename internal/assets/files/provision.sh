@@ -62,17 +62,34 @@ shared_dir /srv/code/.gcloud/default 2775
 # acts only on its caller, and re-running this script, which the unit fetches
 # from instance metadata. Only the GCP API can change that, so changing what
 # root runs needs IAM permission on the project, not a shell on the box.
+#
+# With sudo.password_secret set, the sudo-password step below grants each
+# admin confirmed by the admins step, by uid, everything else behind root's
+# password, which it sets from that hash. The grant sits between the deny and
+# the two commands, so they stay passwordless. timestamp_timeout=0 asks every
+# time: nothing else on the box, agents included, rides on a password you
+# typed a minute ago.
 step sudo
 rm -f /etc/sudoers.d/devbox-admins   # the NOPASSWD grants earlier versions wrote
-sudoers=$(mktemp)
-cat > "$sudoers" <<'EOF'
-# Written by provision.sh. No general sudo for anyone but root: see README.md, Security.
-ALL, !root ALL=(ALL:ALL) !ALL
-ALL ALL=(root) NOPASSWD: /usr/local/sbin/devbox-enroll "", /usr/bin/systemctl restart devbox-provision.service
-EOF
-visudo -cqf "$sudoers" || { echo "sudoers file does not parse; refusing" >&2; exit 1; }
-install -m 0440 "$sudoers" /etc/sudoers.d/zz-devbox
-rm -f "$sudoers"
+# write_sudoers [UID...]: install zz-devbox, with password sudo for each UID.
+write_sudoers() {
+  local sudoers u
+  sudoers=$(mktemp)
+  {
+    echo "# Written by provision.sh. No general sudo for anyone but root: see README.md, Security."
+    echo "ALL, !root ALL=(ALL:ALL) !ALL"
+    for u in "$@"; do
+      echo "Defaults:#$u rootpw, timestamp_timeout=0"
+      echo "#$u ALL=(ALL:ALL) ALL"
+    done
+    echo 'ALL ALL=(root) NOPASSWD: /usr/local/sbin/devbox-enroll "", /usr/bin/systemctl restart devbox-provision.service'
+  } > "$sudoers"
+  visudo -cqf "$sudoers" || { rm -f "$sudoers"; echo "sudoers file does not parse; refusing" >&2; exit 1; }
+  install -m 0440 "$sudoers" /etc/sudoers.d/zz-devbox
+  rm -f "$sudoers"
+}
+# Until the admins step has asked OS Login, nobody gets the password grant.
+write_sudoers
 if grep -qs '^[#@]includedir /var/google-sudoers.d' /etc/sudoers; then
   echo "WARNING: /etc/sudoers includes OS Login's grants after /etc/sudoers.d; admins may still have sudo" >&2
 fi
@@ -104,6 +121,7 @@ revoke() {
   rm -f "/srv/code/.devbox/enrolled/$1"
   echo "revoked uid $1: no longer an OS Login admin"
 }
+sudo_uids=()
 for m in /srv/code/.devbox/enrolled/*; do
   [ -e "$m" ] || continue
   uid=$(basename "$m")
@@ -119,11 +137,32 @@ for m in /srv/code/.devbox/enrolled/*; do
   if [ -n "$home" ] && [ ! -d "$home" ]; then mkhomedir_helper "$user" 0077; fi
   loginctl enable-linger "$user" || true   # see devbox-enroll: tmux must outlive sessions
   operator=${operator:-$user}
+  sudo_uids+=("$uid")
   # The check above is about file order; this one is about the outcome.
   if runuser -u "$user" -- sudo -n true 2>/dev/null; then
     echo "WARNING: $user can still sudo; agents running as $user can too" >&2
   fi
 done
+
+# Password sudo for the admins just confirmed, if a hash is configured and
+# readable. Anything less locks root's password and grants nothing.
+step sudo-password
+root_hash=
+if [ -n "${DEVBOX_SUDO_SECRET:-}" ]; then
+  root_hash=$(devbox-secret "$DEVBOX_SUDO_SECRET") || root_hash=
+  # A crypt(5) hash, $id$...: nothing that could end the shadow field.
+  if ! [[ $root_hash =~ ^\$[a-z0-9]+\$[./A-Za-z0-9$=,-]+$ ]]; then
+    echo "WARNING: $DEVBOX_SUDO_SECRET is unreadable or not a crypt hash; no password sudo" >&2
+    root_hash=
+  fi
+fi
+if [ -n "$root_hash" ] && [ ${#sudo_uids[@]} -gt 0 ]; then
+  usermod -p "$root_hash" root
+  write_sudoers "${sudo_uids[@]}"
+else
+  usermod -p '*' root
+fi
+unset root_hash
 
 step packages
 apt_get() { for i in 1 2 3; do apt-get "$@" && return 0; sleep $((i * 10)); done; return 1; }

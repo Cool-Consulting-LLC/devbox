@@ -22,6 +22,7 @@ What does each value in `devbox.yaml` do? One row per key. Absent keys take the 
 | `tailscale.tag` | string | `tag:devbox` | reprovision | ACL tag the node advertises. Must be owned by the OAuth client. |
 | `tailscale.oauth_secret` | string | `devbox-tailscale-oauth` | reprovision | Secret Manager secret holding the Tailscale OAuth client secret. The box can read it only for an hour after its code disk is created, or after reprovision --rejoin. |
 | `ssh_key.secret` | string | `devbox-ssh-key` | reprovision | Secret Manager secret holding the machine ed25519 private key, loaded into the system ssh-agent at boot. The box is granted read access on this secret only. |
+| `sudo.password_secret` | string | *(empty)* | reprovision | Secret Manager secret holding a crypt(5) hash, e.g. from openssl passwd -6. When set, enrolled admins may sudo anything after typing that password, every time. Agents run as you, so one could capture it when you type it. Empty leaves sudo limited to devbox-enroll and reprovisioning. |
 | `snapshots.start_time` | string | `03:00` | in-place | Daily snapshot time of the code disk, UTC, on the hour (HH:00). |
 | `snapshots.retention_days` | integer | `14` | in-place | Days each snapshot is kept. Snapshots outlive the disk. |
 | `alerts.email` | string | *(empty)* | in-place | Address of the email notification channel. Empty disables all alerting resources. |

@@ -207,11 +207,15 @@ const (
 	joinCondTitle     = "devbox-tailnet-join"
 )
 
-// boxSecretIDs are the secrets this box reads at any time: the machine key, and
-// every secret labelled devbox=<name>, which is how `devbox project secret`
-// stores project secrets. The Tailscale OAuth secret is not one of them.
+// boxSecretIDs are the secrets this box reads at any time: the machine key, the
+// sudo password hash if there is one, and every secret labelled devbox=<name>,
+// which is how `devbox project secret` stores project secrets. The Tailscale
+// OAuth secret is not one of them.
 func (b *Box) boxSecretIDs(ctx context.Context) ([]string, error) {
 	ids := []string{b.C.SSHKey.Secret}
+	if b.C.Sudo.PasswordSecret != "" {
+		ids = append(ids, b.C.Sudo.PasswordSecret)
+	}
 	labelled, err := b.ListLabelledSecrets(ctx)
 	if err != nil {
 		return nil, err

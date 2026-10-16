@@ -7,9 +7,11 @@ import (
 	"strings"
 )
 
-// Key is one leaf of devbox.yaml, as documented.
+// Key is one leaf of devbox.yaml, as documented. Empty means default:"" was
+// written out: the key is optional and off unless set.
 type Key struct {
 	Path, Type, Default, Tier, Describe string
+	Empty                               bool
 }
 
 // Keys walks Config's struct tags. It is the single source for docs/config.md.
@@ -39,8 +41,9 @@ func walk(t reflect.Type, prefix string, out *[]Key) {
 		case reflect.Slice:
 			typ = "list of " + ft.Elem().Kind().String()
 		}
+		def, ok := f.Tag.Lookup("default")
 		*out = append(*out, Key{
-			Path: path, Type: typ, Default: f.Tag.Get("default"),
+			Path: path, Type: typ, Default: def, Empty: ok && def == "",
 			Tier: f.Tag.Get("tier"), Describe: f.Tag.Get("describe"),
 		})
 	}
@@ -66,7 +69,7 @@ func WriteMarkdown(w io.Writer) error {
 		def := k.Default
 		if def == "" {
 			def = "*(required)*"
-			if k.Tier == TierInPlace || k.Tier == TierRefused {
+			if k.Empty || k.Tier == TierInPlace || k.Tier == TierRefused {
 				def = "*(empty)*"
 			}
 		} else {

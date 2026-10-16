@@ -6,7 +6,7 @@ A Claude Code workstation in your own GCP project, reachable over your tailnet, 
 
 `devbox` makes a GCP project match `devbox.yaml`: an Ubuntu VM you reach over Tailscale SSH or mosh, with Claude Code, `gh`, Terraform, Go, Node, uv, ruff and pytest installed. Your work lives on `/srv/code`, a separate disk that is snapshotted daily and survives rebuilds. The box suspends itself after an hour idle and keeps its memory, so tmux and Claude Code sessions survive. It costs about $12 a month while suspended and about 15¢ an hour while running; see [Costs](#costs).
 
-A dedicated SSH key in Secret Manager authenticates to GitHub and signs commits. Nobody has sudo on the box, and agents are denied `git commit`, `git push` and applies.
+A dedicated SSH key in Secret Manager authenticates to GitHub and signs commits. Nobody has sudo on the box unless you opt into password sudo (see [Sudo](#sudo)), and agents are denied `git commit`, `git push` and applies.
 
 ### Security
 
@@ -133,6 +133,21 @@ The non-secret variables also go into `.claude/settings.local.json`, in the proj
 - [docs/config.md](docs/config.md) says which keys need which.
 
 If the tailnet is down, add `--iap`. If a new box hasn't joined the tailnet within an hour, run `./devbox reprovision --iap --rejoin`.
+
+### Sudo
+
+By default nobody can sudo. To allow it with a password, store a crypt hash of one and name the secret in `devbox.yaml`:
+
+```bash
+openssl passwd -6 | gcloud secrets create devbox-sudo-password-hash --data-file=-   # OpenSSL 3; on a Mac, Homebrew's
+```
+
+```yaml
+sudo:
+  password_secret: devbox-sudo-password-hash
+```
+
+Then run `./devbox apply` and `./devbox reprovision`. You can then sudo anything after typing the password, and it asks every time. Agents can't type it, but they run as you, so a hostile one could plant a fake `sudo` and catch the password the next time you type it. The hash is readable on the box, so use a long password. To rotate it, add a new version of the secret and reprovision. To turn it off, set the key back to `""`.
 
 ### Tearing down
 

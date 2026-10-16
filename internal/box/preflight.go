@@ -144,10 +144,14 @@ func (b *Box) Preflight(ctx context.Context, fix bool, w io.Writer) (*PreflightR
 	b.checkOrgPolicies(ctx, add)
 	b.checkMachine(ctx, add)
 
-	for _, s := range []struct{ id, hint string }{
+	secrets := []struct{ id, hint string }{
 		{b.C.Tailscale.OAuthSecret, "create it: README.md, How to set it up, step 3"},
 		{b.C.SSHKey.Secret, "create it: README.md, How to set it up, step 4"},
-	} {
+	}
+	if b.C.Sudo.PasswordSecret != "" {
+		secrets = append(secrets, struct{ id, hint string }{b.C.Sudo.PasswordSecret, "create it: README.md, Sudo"})
+	}
+	for _, s := range secrets {
 		ok, err := b.SecretExists(ctx, s.id)
 		switch {
 		case err != nil:

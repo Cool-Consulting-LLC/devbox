@@ -46,6 +46,7 @@ type Config struct {
 	Git       Git         `yaml:"git"`
 	Tailscale Tailscale   `yaml:"tailscale"`
 	SSHKey    SSHKey      `yaml:"ssh_key"`
+	Sudo      Sudo        `yaml:"sudo"`
 	Snapshots Snapshots   `yaml:"snapshots"`
 	Alerts    Alerts      `yaml:"alerts"`
 	Idle      IdleSuspend `yaml:"idle_suspend"`
@@ -69,6 +70,10 @@ type Tailscale struct {
 
 type SSHKey struct {
 	Secret string `yaml:"secret" describe:"Secret Manager secret holding the machine ed25519 private key, loaded into the system ssh-agent at boot. The box is granted read access on this secret only." tier:"reprovision" default:"devbox-ssh-key"`
+}
+
+type Sudo struct {
+	PasswordSecret string `yaml:"password_secret" describe:"Secret Manager secret holding a crypt(5) hash, e.g. from openssl passwd -6. When set, enrolled admins may sudo anything after typing that password, every time. Agents run as you, so one could capture it when you type it. Empty leaves sudo limited to devbox-enroll and reprovisioning." tier:"reprovision" default:""`
 }
 
 type Snapshots struct {
@@ -219,6 +224,9 @@ func (c *Config) Validate() error {
 		if !secretIDRe.MatchString(v) {
 			bad("%s %q is not a Secret Manager secret ID", k, v)
 		}
+	}
+	if v := c.Sudo.PasswordSecret; v != "" && !secretIDRe.MatchString(v) {
+		bad("sudo.password_secret %q is not a Secret Manager secret ID", v)
 	}
 	if !hourRe.MatchString(c.Snapshots.StartTime) {
 		bad("snapshots.start_time %q must be HH:00 in UTC", c.Snapshots.StartTime)

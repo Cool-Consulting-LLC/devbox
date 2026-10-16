@@ -113,6 +113,7 @@ func ConfigEnv(c *config.Config) string {
 		"DEVBOX_TS_TAG":         c.Tailscale.Tag,
 		"DEVBOX_TS_SECRET":      c.Tailscale.OAuthSecret,
 		"DEVBOX_SSH_KEY_SECRET": c.SSHKey.Secret,
+		"DEVBOX_SUDO_SECRET":    c.Sudo.PasswordSecret,
 		"DEVBOX_IDLE_ENABLED":   fmt.Sprint(c.IdleEnabled()),
 		"DEVBOX_IDLE_MINUTES":   fmt.Sprint(c.Idle.AfterMinutes),
 		"DEVBOX_EXTRA_PACKAGES": strings.Join(c.ExtraPackages, " "),
