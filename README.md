@@ -111,11 +111,19 @@ When your Google login expires, `./devbox up` logs you in again first, as `make 
 ### Projects
 
 ```bash
-./devbox project add git@github.com:acme/api.git --gcloud-config client-a --gcp-project acme-prod
-./devbox project secret acme-api OPENAI_API_KEY      # prompts; stored in Secret Manager
+./devbox project add git@github.com:acme/api.git --project acme --gcloud-config client-a --gcp-project acme-prod
+./devbox project add git@github.com:acme/web.git --project acme
+./devbox project secret acme OPENAI_API_KEY          # prompts; stored in Secret Manager
 ```
 
-Each project is a clone under `/srv/code` with its own tmux session. Secrets are read from Secret Manager into the session's environment, never written to disk. After adding a secret, run `devbox-sessions --recreate acme-api` on the box. Log a gcloud config in with `devbox-gcloud-login client-a` on the box.
+A project is a directory under `/srv/code` with its own tmux session, variables and secrets. Its repos, one or many, are subdirectories: here `/srv/code/acme/api` and `/srv/code/acme/web`. Start `claude` in the project root, where the session starts, so that one Claude Code session and its memory cover every repo. `devbox project add` writes a `CLAUDE.md` there listing the repos; say in it what each one is for.
+
+Secrets are read from Secret Manager into the session's environment, never written to disk. After adding a secret, run `devbox-sessions --recreate acme` on the box. Log a gcloud config in with `devbox-gcloud-login client-a` on the box.
+
+The non-secret variables also go into `.claude/settings.local.json`, in the project root and in each repo, for Claude Code started outside the session. Claude Code reads that file from the git root it starts in, never from a parent directory, hence the copies.
+
+- `devbox project init NAME` makes a directory of repos you cloned by hand into a project.
+- `devbox project nest NAME` moves a project made before this layout, which is a repo itself, into it. `--name` renames a project too, or only renames one: it moves the directory, the tmux session, the secrets and Claude Code's history and memory. Both restart the project's session.
 
 ### Changing the box
 

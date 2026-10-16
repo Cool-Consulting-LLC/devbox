@@ -7,7 +7,9 @@
 #   8%  31% 12% 20%  $0.42 12m +80/-12  Fable 5.1
 #
 # Segments, each omitted when it does not apply, never an error:
-#   - directory (project name cut to its last 7 characters) and git state
+#   - directory (project name cut to its last 7 characters) and git state, or
+#     at a project root that is not a repo, how many repos it holds and how
+#     many have changes
 #   - in a project session on the box: the gcloud config, project and region
 #     that `devbox project` gave the session
 #   - whether Application Default Credentials exist in that gcloud config,
@@ -59,7 +61,8 @@ meter() {
 
 segments=()
 
-# Directory and git state. Project dir is the repo; cwd may be a subdirectory.
+# Directory and git state. Project dir is where claude started: a repo, or a
+# project root holding repos. cwd may be below it.
 dir=${cwd:-$PWD}
 root=${project_dir:-$dir}
 name=$(basename "$root")
@@ -80,6 +83,18 @@ if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     [ "${behind:-0}" -gt 0 ] && ab+=" ↓$behind"
   fi
   seg+=" ${CYAN}⎇ ${branch}${RESET}${dirty}${ab:+${DIM}${ab}${RESET}}"
+else
+  # A project root holding several repos: how many, and how many have changes.
+  n=0 nd=0
+  for g in "$dir"/*/.git; do
+    [ -e "$g" ] || continue
+    n=$((n + 1))
+    [ -n "$(git -C "${g%/.git}" status --porcelain 2>/dev/null | head -1)" ] && nd=$((nd + 1))
+  done
+  if [ "$n" -gt 0 ]; then
+    seg+=" ${CYAN}${n} repos${RESET}"
+    [ "$nd" -gt 0 ] && seg+=" ${YELLOW}${nd}*${RESET}"
+  fi
 fi
 segments+=("$seg")
 

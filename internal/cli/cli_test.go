@@ -64,3 +64,39 @@ func TestEnvFlagsKV(t *testing.T) {
 		}
 	}
 }
+
+func TestRepoName(t *testing.T) {
+	for in, want := range map[string]string{
+		"git@github.com:acme/api.git": "api",
+		"https://github.com/acme/api": "api",
+		"git@github.com:a/b.c.git":    "b.c",
+		"nope":                        "",
+	} {
+		if got := RepoName(in); got != want {
+			t.Errorf("RepoName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRenameSecrets(t *testing.T) {
+	refs := "OPENAI_API_KEY devbox-acme-api-OPENAI_API_KEY\nSHARED some-other-secret\n\nDB devbox-acme-api-DB\n"
+	got, err := RenameSecrets("devbox", "acme-api", "acme", refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []SecretMove{
+		{"OPENAI_API_KEY", "devbox-acme-api-OPENAI_API_KEY", "devbox-acme-OPENAI_API_KEY"},
+		{"DB", "devbox-acme-api-DB", "devbox-acme-DB"},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("RenameSecrets = %+v", got)
+	}
+	// Dots are not allowed in secret IDs; both sides are mapped the same way.
+	got, _ = RenameSecrets("devbox", "a.b", "c", "K devbox-a_b-K")
+	if len(got) != 1 || got[0].To != "devbox-c-K" {
+		t.Errorf("dotted: %+v", got)
+	}
+	if got, _ := RenameSecrets("devbox", "p", "q", ""); len(got) != 0 {
+		t.Errorf("empty: %+v", got)
+	}
+}

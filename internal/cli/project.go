@@ -17,9 +17,18 @@ import (
 func projectCmd(g *globals) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "project",
-		Short: "Add projects to the box, change their variables, give them secrets",
+		Short: "Add projects and their repos to the box, change their variables, give them secrets",
+		Long: `A project is a directory under /srv/code with its own tmux session, variables
+and secrets. Its repos are subdirectories, one or many:
+
+  /srv/code/lore/            tmux session "lore"; start claude here
+    .devbox-env  CLAUDE.md
+    api/  frontend/          repos
+
+Projects made before this layout are a repo themselves; ` + "`devbox project nest`" + `
+moves one into it.`,
 	}
-	cmd.AddCommand(projectAddCmd(g), projectSetCmd(g), projectSecretCmd(g))
+	cmd.AddCommand(projectAddCmd(g), projectInitCmd(g), projectSetCmd(g), projectSecretCmd(g), projectNestCmd(g))
 	return cmd
 }
 
@@ -32,6 +41,24 @@ func DirFor(repo string) string {
 		return ""
 	}
 	return m[1] + "-" + m[2]
+}
+
+// RepoName turns git@github.com:acme/api.git into api.
+func RepoName(repo string) string {
+	m := repoNameRe.FindStringSubmatch(repo)
+	if m == nil {
+		return ""
+	}
+	return m[2]
+}
+
+var dirNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+func checkDirName(flag, name string) error {
+	if !dirNameRe.MatchString(name) {
+		return fmt.Errorf("%s %q: use letters, digits, '.', '_' and '-', not starting with '.' or '-'", flag, name)
+	}
+	return nil
 }
 
 var gcloudConfigRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -126,26 +153,40 @@ func UnsetWords(unset []string) ([]string, error) {
 func projectAddCmd(g *globals) *cobra.Command {
 	var rf remoteFlags
 	var ef envFlags
-	var dir string
+	var project, dir string
 	cmd := &cobra.Command{
 		Use:   "add <repo>",
-		Short: "Clone and register a project on the box",
-		Long: `Clones <repo> into /srv/code/<owner>-<repo>/ with the box's machine key, writes
-.devbox-env from the flags, writes the same non-secret variables into
-.claude/settings.local.json for agent sessions, and creates the project's tmux
-session. To change the variables later, use ` + "`devbox project set`" + `.
+		Short: "Clone a repo into a project, creating the project if needed",
+		Long: `Clones <repo> into /srv/code/<project>/<repo>/ with the box's machine key.
+If the project is new, this creates it: .devbox-env from the flags, a CLAUDE.md
+stub for the project root, and the project's tmux session. Flags given for a
+project that exists are added to its variables, as ` + "`devbox project set`" + ` does.
+
+The same non-secret variables go into .claude/settings.local.json in the project
+root and in each repo: Claude Code reads that file from the git root it starts
+in, never from a parent directory.
 
 ` + envFlagsHelp,
-		Example: `  devbox project add git@github.com:acme/api.git \
-    --gcloud-config client-a --gcp-project acme-prod --region europe-west2`,
+		Example: `  devbox project add git@github.com:acme/api.git --project acme \
+    --gcloud-config client-a --gcp-project acme-prod --region europe-west2
+  devbox project add git@github.com:acme/web.git --project acme`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo := args[0]
-			if dir == "" {
-				dir = DirFor(repo)
+			if project == "" {
+				project = DirFor(repo)
 			}
 			if dir == "" {
-				return fmt.Errorf("cannot derive a directory from %q; pass --dir", repo)
+				dir = RepoName(repo)
+			}
+			if project == "" || dir == "" {
+				return fmt.Errorf("cannot derive a directory from %q; pass --project and --dir", repo)
+			}
+			if err := checkDirName("--project", project); err != nil {
+				return err
+			}
+			if err := checkDirName("--dir", dir); err != nil {
+				return err
 			}
 			kv, err := ef.kv()
 			if err != nil {
@@ -162,12 +203,197 @@ session. To change the variables later, use ` + "`devbox project set`" + `.
 			if err != nil {
 				return err
 			}
-			words := append([]string{"devbox-project", "add", repo, dir}, kv...)
+			words := append([]string{"devbox-project", "add", repo, project, dir}, kv...)
 			return t.Run(ctx, remote.Join(words...), nil)
 		},
 	}
-	cmd.Flags().StringVar(&dir, "dir", "", "directory under /srv/code (default: <owner>-<repo>)")
+	cmd.Flags().StringVar(&project, "project", "", "project directory under /srv/code (default: <owner>-<repo>)")
+	cmd.Flags().StringVar(&dir, "dir", "", "the clone's directory inside the project (default: <repo>)")
 	ef.add(cmd)
+	rf.add(cmd)
+	return cmd
+}
+
+func projectInitCmd(g *globals) *cobra.Command {
+	var rf remoteFlags
+	var ef envFlags
+	cmd := &cobra.Command{
+		Use:   "init <project>",
+		Short: "Make /srv/code/<project> a project, with repos already in it or none yet",
+		Long: `Creates /srv/code/<project>/ if it is missing, then does what ` + "`add`" + ` does
+for a new project, without cloning: .devbox-env, CLAUDE.md listing the repos
+already there, settings for the root and each repo, and the tmux session. Use it
+for a directory of repos you cloned by hand.
+
+` + envFlagsHelp,
+		Example: `  devbox project init lore --gcloud-config lore --gcp-project lore-prod`,
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			project := args[0]
+			if err := checkDirName("project", project); err != nil {
+				return err
+			}
+			kv, err := ef.kv()
+			if err != nil {
+				return err
+			}
+			ctx, cancel := signalCtx()
+			defer cancel()
+			b, err := g.load(ctx)
+			if err != nil {
+				return err
+			}
+			t, err := rf.target(ctx, b)
+			if err != nil {
+				return err
+			}
+			return t.Run(ctx, remote.Join(append([]string{"devbox-project", "init", project}, kv...)...), nil)
+		},
+	}
+	ef.add(cmd)
+	rf.add(cmd)
+	return cmd
+}
+
+// SecretMove is a project secret that a rename stores under a new ID.
+type SecretMove struct{ Key, From, To string }
+
+// RenameSecrets reads `devbox-project secrets` output ("KEY ID" lines) and
+// returns the secrets of project that are named for it and so must follow a
+// rename to newName. A reference to a secret named anything else stays as it is.
+func RenameSecrets(boxName, project, newName, refs string) ([]SecretMove, error) {
+	var moves []SecretMove
+	for _, line := range strings.Split(strings.TrimSpace(refs), "\n") {
+		key, id, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		from, err := box.ProjectSecretID(boxName, project, key)
+		if err != nil || id != from {
+			continue
+		}
+		to, err := box.ProjectSecretID(boxName, newName, key)
+		if err != nil {
+			return nil, err
+		}
+		moves = append(moves, SecretMove{key, from, to})
+	}
+	return moves, nil
+}
+
+func projectNestCmd(g *globals) *cobra.Command {
+	var rf remoteFlags
+	var newName, repoDir string
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "nest <project>",
+		Short: "Move a project that is a repo into the project layout, or rename a project",
+		Long: `For a project that is itself a repo, /srv/code/<project>/ with .git in it, moves
+the repo to /srv/code/<project>/<repo>/ and leaves .devbox-env, .env and the
+settings in the project root. <repo> is the name in its origin URL, or --repo-dir.
+
+--name renames the project too, or only renames one already in the layout:
+/srv/code/<project> becomes /srv/code/<name>, its tmux session is renamed, and
+its secrets are copied to secrets named for the new project before the old
+ones are deleted.
+
+Either way, Claude Code's history and memory for the project and the directories
+in it move to the new paths, and the tmux session is restarted, which kills
+whatever runs in it. It refuses while Claude Code runs in the project, unless
+--force. Claude Code asks once to trust the new directory.`,
+		Example: `  devbox project nest acme-api
+  devbox project nest acme-api --name acme
+  devbox project nest handshake-consulting-Lore --name lore`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			project := args[0]
+			to := newName
+			if to == "" {
+				to = project
+			}
+			sub := repoDir
+			if sub == "" {
+				sub = "-"
+			} else if err := checkDirName("--repo-dir", sub); err != nil {
+				return err
+			}
+			if err := checkDirName("project", project); err != nil {
+				return err
+			}
+			if err := checkDirName("--name", to); err != nil {
+				return err
+			}
+			ctx, cancel := signalCtx()
+			defer cancel()
+			b, err := g.load(ctx)
+			if err != nil {
+				return err
+			}
+			t, err := rf.target(ctx, b)
+			if err != nil {
+				return err
+			}
+			words := []string{"devbox-project", "nest", project, to, sub}
+			if force {
+				words = append(words, "--force")
+			}
+			// Everything the box can refuse, before any secret is copied.
+			if err := t.Run(ctx, remote.Join(append(words, "--check")...), nil); err != nil {
+				return err
+			}
+
+			var moves []SecretMove
+			if to != project {
+				out, err := t.Output(ctx, remote.Join("devbox-project", "secrets", project))
+				if err != nil {
+					return err
+				}
+				if moves, err = RenameSecrets(b.C.Name, project, to, string(out)); err != nil {
+					return err
+				}
+			}
+			var created []string
+			undo := func() {
+				for _, id := range created {
+					if err := b.DeleteSecret(ctx, id); err != nil {
+						fmt.Fprintf(os.Stderr, "could not delete %s: %v\n", id, err)
+					}
+				}
+			}
+			for _, m := range moves {
+				v, err := b.AccessSecret(ctx, m.From)
+				if err != nil {
+					undo()
+					return fmt.Errorf("reading %s: %w", m.From, err)
+				}
+				existed, err := b.PutSecret(ctx, m.To, to, v)
+				if err != nil {
+					undo()
+					return fmt.Errorf("storing %s: %w", m.To, err)
+				}
+				if !existed {
+					created = append(created, m.To)
+				}
+				words = append(words, m.Key+"=@secret:"+m.To)
+			}
+
+			if err := t.Run(ctx, remote.Join(words...), nil); err != nil {
+				undo()
+				return err
+			}
+			for _, m := range moves {
+				if err := b.DeleteSecret(ctx, m.From); err != nil {
+					fmt.Fprintf(os.Stderr, "%s is now %s, but deleting the old secret failed: %v\n", m.From, m.To, err)
+					continue
+				}
+				fmt.Printf("secret %s is now %s\n", m.From, m.To)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&newName, "name", "", "rename the project to this")
+	cmd.Flags().StringVar(&repoDir, "repo-dir", "", "the repo's directory inside the project (default: its name in the origin URL)")
+	cmd.Flags().BoolVar(&force, "force", false, "go ahead even while Claude Code runs in the project")
 	rf.add(cmd)
 	return cmd
 }

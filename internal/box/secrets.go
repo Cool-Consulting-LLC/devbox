@@ -121,6 +121,15 @@ func (b *Box) disableOldVersions(ctx context.Context, id string) {
 	}
 }
 
+// AccessSecret returns the value of the secret's newest enabled version.
+func (b *Box) AccessSecret(ctx context.Context, id string) ([]byte, error) {
+	r, err := b.G.Secrets.Projects.Secrets.Versions.Access(b.secretName(id) + "/versions/latest").Context(ctx).Do()
+	if err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(r.Payload.Data)
+}
+
 func (b *Box) DeleteSecret(ctx context.Context, id string) error {
 	_, err := b.G.Secrets.Projects.Secrets.Delete(b.secretName(id)).Context(ctx).Do()
 	if gcp.IsNotFound(err) {

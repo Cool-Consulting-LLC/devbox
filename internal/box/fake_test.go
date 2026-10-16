@@ -30,6 +30,7 @@ const fakeProjectNumber = 123456789
 type fakeSecret struct {
 	s        *secretmanager.Secret
 	versions []*secretmanager.SecretVersion
+	data     map[string]string // version name -> base64 payload
 	policy   *secretmanager.Policy
 }
 
@@ -624,6 +625,10 @@ func (f *fakeGCP) secretmanager(r *http.Request, p string, body []byte) (any, er
 			v := &secretmanager.SecretVersion{Name: fmt.Sprintf("%s/versions/%d", s.s.Name, len(s.versions)+1), State: "ENABLED",
 				CreateTime: fmt.Sprintf("2026-02-%02dT00:00:00Z", len(s.versions)+1)}
 			s.versions = append(s.versions, v)
+			if s.data == nil {
+				s.data = map[string]string{}
+			}
+			s.data[v.Name] = decode[secretmanager.AddSecretVersionRequest](f.t, body).Payload.Data
 			return v, nil
 		case r.Method == http.MethodDelete:
 			delete(f.secrets, id)
@@ -643,8 +648,11 @@ func (f *fakeGCP) secretmanager(r *http.Request, p string, body []byte) (any, er
 	vid, vverb, _ := strings.Cut(parts[5], ":")
 	if vid == "latest" {
 		for i := len(s.versions) - 1; i >= 0; i-- {
-			if s.versions[i].State == "ENABLED" {
-				return s.versions[i], nil
+			if v := s.versions[i]; v.State == "ENABLED" {
+				if vverb == "access" {
+					return &secretmanager.AccessSecretVersionResponse{Name: v.Name, Payload: &secretmanager.SecretPayload{Data: s.data[v.Name]}}, nil
+				}
+				return v, nil
 			}
 		}
 		return nil, errf(404, "no enabled version")

@@ -435,6 +435,9 @@ func TestPutSecretRotates(t *testing.T) {
 	if s.s.Labels["devbox"] != "devbox" || len(s.versions) != 2 || s.versions[0].State != "DISABLED" || s.versions[1].State != "ENABLED" {
 		t.Fatalf("versions: %+v %+v", s.versions[0], s.versions[1])
 	}
+	if v, err := e.b.AccessSecret(e.ctx, "devbox-acme-api-KEY"); err != nil || string(v) != "v2" {
+		t.Fatalf("AccessSecret = %q, %v", v, err)
+	}
 	if err := e.b.DeleteSecret(e.ctx, "devbox-acme-api-KEY"); err != nil || e.f.secrets["devbox-acme-api-KEY"] != nil {
 		t.Fatal("not deleted")
 	}

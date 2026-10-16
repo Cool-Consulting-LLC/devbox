@@ -1,14 +1,22 @@
 #!/bin/bash
 # Box-side half of `devbox project`. Runs as the login user over SSH.
-#   devbox-project add <repo> <dir> [KEY=VALUE ...]
-#   devbox-project set <dir> [--recreate] [KEY=VALUE | -KEY ...]
-#   devbox-project secret-ref <dir> <KEY> <secret-id>
-#   devbox-project secret-unref <dir> <KEY>
+#   devbox-project add <repo> <project> <subdir> [KEY=VALUE ...]
+#   devbox-project init <project> [KEY=VALUE ...]
+#   devbox-project set <project> [--recreate] [KEY=VALUE | -KEY ...]
+#   devbox-project nest <project> <new-name> <subdir|-> [--check] [--force] [KEY=VALUE ...]
+#   devbox-project secrets <project>
+#   devbox-project secret-ref <project> <KEY> <secret-id>
+#   devbox-project secret-unref <project> <KEY>
+# A project is /srv/code/<project>/ holding .devbox-env and its repos, one per
+# subdirectory. An older project may be a repo itself; `nest` moves it inside.
 set -euo pipefail
 export SSH_AUTH_SOCK=/run/devbox/ssh-agent.sock
+# DEVBOX_CODE_DIR is for tests.
+code=${DEVBOX_CODE_DIR:-/srv/code}
 # Over a plain `ssh host command` no login profile runs, so enroll here too.
-[ -e "/srv/code/.devbox/enrolled/$(id -u)" ] || sudo -n /usr/local/sbin/devbox-enroll >/dev/null
+[ -e "$code/.devbox/enrolled/$(id -u)" ] || sudo -n /usr/local/sbin/devbox-enroll >/dev/null
 die() { echo "devbox-project: $*" >&2; exit 1; }
+name_ok() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad directory name $1"; }
 
 # upsert FILE KEY VALUE: replace KEY's line or append it.
 upsert() {
@@ -26,25 +34,50 @@ remove() {
   mv "$tmp" "$f"
 }
 
-# The env block agents get. Never secrets: nothing resolves @secret: there.
-# settings DIR [REMOVED_KEY ...]: the merge keeps old keys, so removed ones are named.
-settings() {
-  local dir=$1 f=$1/.claude/settings.local.json; shift
-  mkdir -p "$dir/.claude"
-  [ -f "$f" ] || echo '{}' > "$f"
-  { grep -v -e '^#' -e '^$' -e '=@secret:' -e '^DEVBOX_' "$dir/.devbox-env" || true; } \
-    | jq -R 'capture("^(?<k>[A-Za-z_][A-Za-z0-9_]*)=(?<v>.*)$")' \
-    | jq -s --slurpfile cur "$f" '$cur[0] * {env: (map({(.k): .v}) | add // {})}' \
-    | jq '.env |= (del(.[$ARGS.positional[]]))' --args "$@" > "$f.new"
-  mv "$f.new" "$f"
+# repos DIR: the project's git repos, one per line: DIR itself if it is one,
+# else its subdirectories that are.
+repos() {
+  local g
+  if [ -e "$1/.git" ]; then echo "$1"; return; fi
+  for g in "$1"/*/.git; do [ -e "$g" ] && echo "${g%/.git}"; done
+  return 0
 }
 
+# tracked REPO PATH: whether git tracks PATH, so writing it would show up as a change.
+tracked() { git -C "$1" ls-files --error-unmatch -- "$2" >/dev/null 2>&1; }
+
+# The env block agents get. Never secrets: nothing resolves @secret: there.
+# Claude Code reads .claude/settings.local.json from the git root it starts in,
+# never from a parent directory, so each repo gets a copy as well as the project.
+# settings DIR [REMOVED_KEY ...]: the merge keeps old keys, so removed ones are named.
+settings() {
+  local dir=$1 env r f; shift
+  env=$({ grep -v -e '^#' -e '^$' -e '=@secret:' -e '^DEVBOX_' "$dir/.devbox-env" || true; } \
+    | jq -R 'capture("^(?<k>[A-Za-z_][A-Za-z0-9_]*)=(?<v>.*)$")' \
+    | jq -sc 'map({(.k): .v}) | add // {}')
+  while IFS= read -r r; do
+    f=$r/.claude/settings.local.json
+    if [ "$r" != "$dir" ] && tracked "$r" .claude/settings.local.json; then
+      echo "devbox-project: $f is tracked by git; not writing the env block there" >&2; continue
+    fi
+    # A repo with nothing to set and no file yet is left alone.
+    [ "$r" != "$dir" ] && [ ! -f "$f" ] && [ "$env" = '{}' ] && continue
+    mkdir -p "$r/.claude"
+    [ -f "$f" ] || echo '{}' > "$f"
+    jq --argjson env "$env" '. * {env: $env} | .env |= del(.[$ARGS.positional[]])' "$f" --args "$@" > "$f.new"
+    mv "$f.new" "$f"
+  done < <(echo "$dir"; repos "$dir" | grep -vxF "$dir")
+}
+
+# exclude DIR: keep what devbox writes out of each repo's git status.
 exclude() {
-  local dir=$1
-  [ -d "$dir/.git" ] || return 0
-  for p in .devbox-env .env .claude/settings.local.json; do
-    grep -qxF "$p" "$dir/.git/info/exclude" 2>/dev/null || echo "$p" >> "$dir/.git/info/exclude"
-  done
+  local r p
+  while IFS= read -r r; do
+    [ -d "$r/.git" ] || continue
+    for p in .devbox-env .env .claude/settings.local.json; do
+      grep -qxF "$p" "$r/.git/info/exclude" 2>/dev/null || echo "$p" >> "$r/.git/info/exclude"
+    done
+  done < <(repos "$1")
 }
 
 # gcloud_check DIR: warn if the project's gcloud config has no login yet.
@@ -65,20 +98,106 @@ gcloud_check() {
   echo "then: devbox-sessions --recreate $(basename "$1" | tr . _)" >&2
 }
 
+# claude_md DIR: a CLAUDE.md for the project root, which is not a repo, so that
+# Claude Code started there knows where the repos are. Written once; yours after.
+claude_md() {
+  local dir=$1 r
+  if [ -f "$dir/CLAUDE.md" ]; then
+    for r in "${@:2}"; do
+      grep -qF "\`$r/\`" "$dir/CLAUDE.md" || echo "add $r/ to $dir/CLAUDE.md"
+    done
+    return 0
+  fi
+  {
+    printf '# %s\n\n' "$(basename "$dir")"
+    printf 'This directory is a devbox project, not a git repository. Each repo is a\n'
+    printf 'subdirectory; run git inside the one you mean.\n\n## Repos\n\n'
+    while IFS= read -r r; do printf -- '- `%s/`\n' "$(basename "$r")"; done < <(repos "$dir")
+  } > "$dir/CLAUDE.md"
+  echo "wrote $dir/CLAUDE.md; say there what each repo is for"
+}
+
+# project DIR [KEY=VALUE ...]: register DIR, which holds repos, as a project.
+project() {
+  local dir=$1 s kv; shift
+  s=$(basename "$dir"); s=${s//./_}
+  touch "$dir/.devbox-env"; chmod 600 "$dir/.devbox-env"
+  for kv in "$@"; do upsert "$dir/.devbox-env" "${kv%%=*}" "${kv#*=}"; done
+  settings "$dir"; exclude "$dir"; gcloud_check "$dir"
+  if [ $# -gt 0 ] && tmux has-session -t "=$s" 2>/dev/null; then
+    echo "the running session keeps the old values until: devbox project set $(basename "$dir") --recreate"
+  else
+    QUIET=1 devbox-sessions
+  fi
+}
+
+# mangle PATH: Claude Code's directory name for PATH under its projects/.
+mangle() { printf '%s' "${1//[^A-Za-z0-9]/-}"; }
+
+# claude_state SRC DST SUBDIR|-: move Claude Code's history and memory for SRC
+# and the directories under it to where they now are. SRC itself becomes DST,
+# the project root; with SUBDIR, SRC was a repo and the rest is now DST/SUBDIR.
+claude_state() {
+  local src=$1 dst=$2 sub=$3 base d key p rel to e
+  base=${CLAUDE_CONFIG_DIR:-$code/.home/$USER/claude}/projects
+  [ -d "$base" ] || return 0
+  for d in "$base"/*/; do
+    d=${d%/} key=$(basename "$d") p=""
+    if [ "$key" = "$(mangle "$src")" ]; then
+      p=$src
+    else
+      # The name is lossy; a transcript records the real directory.
+      for e in "$d"/*.jsonl; do
+        [ -f "$e" ] || continue
+        p=$(head -n 20 "$e" | jq -r 'objects | .cwd // empty' 2>/dev/null | head -n 1 || true)
+        [ -n "$p" ] && break
+      done
+    fi
+    case $p in
+      "$src") to=$dst ;;
+      "$src"/*) rel=${p#"$src"/}; if [ "$sub" = - ]; then to=$dst/$rel; else to=$dst/$sub/$rel; fi ;;
+      *) continue ;;
+    esac
+    [ "$(mangle "$to")" = "$key" ] && continue
+    to=$base/$(mangle "$to")
+    if [ ! -e "$to" ]; then mv "$d" "$to"; echo "moved Claude Code state $key"; continue; fi
+    for e in "$d"/* "$d"/.[!.]*; do
+      [ -e "$e" ] || continue
+      if [ -e "$to/$(basename "$e")" ]; then echo "devbox-project: kept $e: $to has one too" >&2
+      else mv "$e" "$to/"; fi
+    done
+    rmdir "$d" 2>/dev/null && echo "merged Claude Code state $key into $(basename "$to")"
+  done
+  return 0
+}
+
 case ${1:-} in
   add)
-    repo=${2:?repo} name=${3:?dir}; shift 3
-    dir=/srv/code/$name
-    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad directory name $name"
-    if [ -d "$dir/.git" ]; then echo "$dir already cloned"; else git clone "$repo" "$dir"; fi
-    touch "$dir/.devbox-env"; chmod 600 "$dir/.devbox-env"
-    for kv in "$@"; do upsert "$dir/.devbox-env" "${kv%%=*}" "${kv#*=}"; done
-    settings "$dir"; exclude "$dir"; gcloud_check "$dir"
-    QUIET=1 devbox-sessions
+    repo=${2:?repo} name=${3:?project} sub=${4:?subdir}; shift 4
+    name_ok "$name"; name_ok "$sub"
+    dir=$code/$name
+    [ -e "$dir/.git" ] && die "$dir is itself a repo; nest it first: devbox project nest $name"
+    mkdir -p "$dir"
+    if [ -e "$dir/$sub/.git" ]; then echo "$dir/$sub already cloned"; else git clone "$repo" "$dir/$sub"; fi
+    project "$dir" "$@"; claude_md "$dir" "$sub"
+    echo "$dir/$sub ready; tmux session: ${name//./_}"
+    ;;
+  init)
+    name=${2:?project}; shift 2
+    name_ok "$name"
+    dir=$code/$name
+    [ -e "$dir/.git" ] && die "$dir is a repo; a project holds repos in subdirectories"
+    mkdir -p "$dir"
+    project "$dir" "$@"; claude_md "$dir"
     echo "$dir ready; tmux session: ${name//./_}"
     ;;
+  secrets)
+    dir=$code/${2:?project}
+    [ -f "$dir/.devbox-env" ] || die "$dir is not a project"
+    sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=@secret:\(.*\)$/\1 \2/p' "$dir/.devbox-env"
+    ;;
   secret-ref)
-    dir=/srv/code/${2:?dir} key=${3:?key} id=${4:?secret id}
+    dir=$code/${2:?dir} key=${3:?key} id=${4:?secret id}
     [ -d "$dir" ] || die "$dir does not exist; run devbox project add first"
     upsert "$dir/.devbox-env" "$key" "@secret:$id"
     echo "$dir/.devbox-env: $key=@secret:$id"
@@ -86,8 +205,8 @@ case ${1:-} in
     ;;
   set)
     name=${2:?dir}; shift 2
-    dir=/srv/code/$name s=${name//./_}
-    [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad directory name $name"
+    dir=$code/$name s=${name//./_}
+    name_ok "$name"
     [ -f "$dir/.devbox-env" ] || die "$dir is not a project; run devbox project add first"
     recreate=0 removed=()
     if [ "${1:-}" = --recreate ]; then recreate=1; shift; fi
@@ -114,10 +233,64 @@ case ${1:-} in
     echo "restart Claude Code sessions in $dir to pick up the change"
     ;;
   secret-unref)
-    dir=/srv/code/${2:?dir} key=${3:?key}
+    dir=$code/${2:?dir} key=${3:?key}
     [ -f "$dir/.devbox-env" ] || die "$dir/.devbox-env does not exist"
     remove "$dir/.devbox-env" "$key"
     echo "$dir/.devbox-env: removed $key"
     ;;
-  *) die "usage: devbox-project add|set|secret-ref|secret-unref ..." ;;
+  nest)
+    name=${2:?project} new=${3:?new name} sub=${4:?subdir or -}; shift 4
+    check=0 force=0
+    while [[ ${1:-} == --* ]]; do
+      case $1 in --check) check=1 ;; --force) force=1 ;; *) die "unknown flag $1" ;; esac; shift
+    done
+    name_ok "$name"; name_ok "$new"
+    src=$code/$name dst=$code/$new s=${name//./_}
+    [ -f "$src/.devbox-env" ] || die "$src is not a project; to make it one: devbox project init $name"
+    if [ -e "$src/.git" ]; then
+      [ -d "$src/.git" ] || die "$src/.git is not a directory; move this one by hand"
+      if [ "$sub" = - ]; then
+        sub=$(git -C "$src" remote get-url origin 2>/dev/null | sed -E 's#/+$##; s#\.git$##; s#.*[/:]##')
+        sub=${sub:-$name}
+      fi
+      name_ok "$sub"
+    else
+      [ "$sub" = - ] || die "$src already holds its repos; --repo-dir is only for a project that is itself a repo"
+      [ "$new" != "$name" ] || die "$src already holds its repos; pass --name to rename it"
+      sub=-
+    fi
+    [ "$new" = "$name" ] || [ ! -e "$dst" ] || die "$dst already exists"
+    if [ -n "${TMUX:-}" ] && [ "$(tmux display-message -p '#S')" = "$s" ]; then
+      die "this restarts the $s tmux session; run it from another session or the laptop"
+    fi
+    if [ "$force" = 0 ]; then
+      busy=()
+      for p in $(pgrep -u "$(id -u)" -x claude || true); do
+        c=$(readlink "/proc/$p/cwd" 2>/dev/null) || continue
+        case $c in "$src"|"$src"/*) busy+=("$p in $c") ;; esac
+      done
+      [ ${#busy[@]} -eq 0 ] || die "Claude Code is running in $src (pid ${busy[*]}); quit it, or pass --force"
+    fi
+    [ "$check" = 1 ] && exit 0
+
+    tmux kill-session -t "=$s" 2>/dev/null || true
+    if [ "$sub" != - ]; then
+      tmp=$(mktemp -d "$code/.nest-$name.XXXX")
+      mv "$src" "$tmp/$sub"; mkdir "$dst"; mv "$tmp/$sub" "$dst/$sub"; rmdir "$tmp"
+      for f in .devbox-env .env; do [ -e "$dst/$sub/$f" ] && mv "$dst/$sub/$f" "$dst/$f"; done
+      if [ -f "$dst/$sub/.claude/settings.local.json" ]; then
+        mkdir -p "$dst/.claude"; cp -p "$dst/$sub/.claude/settings.local.json" "$dst/.claude/"
+      fi
+      echo "moved $src to $dst/$sub"
+    else
+      mv "$src" "$dst"
+      echo "moved $src to $dst"
+    fi
+    claude_state "$src" "$dst" "$sub"
+    for kv in "$@"; do upsert "$dst/.devbox-env" "${kv%%=*}" "${kv#*=}"; done
+    settings "$dst"; exclude "$dst"; claude_md "$dst"
+    QUIET=1 devbox-sessions
+    echo "$dst ready; tmux session: ${new//./_}. Start claude there, in the project root."
+    ;;
+  *) die "usage: devbox-project add|init|set|nest|secrets|secret-ref|secret-unref ..." ;;
 esac

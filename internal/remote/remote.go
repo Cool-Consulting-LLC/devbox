@@ -27,41 +27,56 @@ type Target struct {
 
 // Run executes cmd (a shell command line) on the box.
 func (t Target) Run(ctx context.Context, cmd string, stdin io.Reader) error {
-	var c *exec.Cmd
-	if t.Local {
-		c = exec.CommandContext(ctx, "sh", "-c", cmd)
-	} else if t.IAP {
-		args := []string{"compute", "ssh", t.Instance, "--project", t.Project, "--zone", t.Zone, "--tunnel-through-iap", "--command", cmd}
-		c = exec.CommandContext(ctx, "gcloud", args...)
-	} else {
-		dest := t.Host
-		if t.User != "" {
-			dest = t.User + "@" + t.Host
-		}
-		args := []string{"-o", "ServerAliveInterval=15"}
-		if stdin != nil {
-			args = append(args, "-T")
-		}
-		// -- ends the options: a --host or --user starting with - is then a
-		// (bad) destination, not an ssh option such as -oProxyCommand.
-		c = exec.CommandContext(ctx, "ssh", append(args, "--", dest, cmd)...)
-	}
+	c := t.command(ctx, cmd, stdin != nil)
 	c.Stdout, c.Stderr = os.Stdout, os.Stderr
 	if stdin != nil {
 		c.Stdin = stdin
 	} else {
 		c.Stdin = os.Stdin
 	}
-	if err := c.Run(); err != nil {
-		how := "ssh " + t.Host
-		if t.Local {
-			how = "on this box"
-		} else if t.IAP {
-			how = "gcloud compute ssh --tunnel-through-iap"
-		}
-		return fmt.Errorf("%s: %w", how, err)
+	return t.wrap(c.Run())
+}
+
+// Output executes cmd on the box and returns its standard output.
+func (t Target) Output(ctx context.Context, cmd string) ([]byte, error) {
+	c := t.command(ctx, cmd, false)
+	c.Stderr = os.Stderr
+	out, err := c.Output()
+	return out, t.wrap(err)
+}
+
+func (t Target) command(ctx context.Context, cmd string, noTTY bool) *exec.Cmd {
+	if t.Local {
+		return exec.CommandContext(ctx, "sh", "-c", cmd)
 	}
-	return nil
+	if t.IAP {
+		args := []string{"compute", "ssh", t.Instance, "--project", t.Project, "--zone", t.Zone, "--tunnel-through-iap", "--command", cmd}
+		return exec.CommandContext(ctx, "gcloud", args...)
+	}
+	dest := t.Host
+	if t.User != "" {
+		dest = t.User + "@" + t.Host
+	}
+	args := []string{"-o", "ServerAliveInterval=15"}
+	if noTTY {
+		args = append(args, "-T")
+	}
+	// -- ends the options: a --host or --user starting with - is then a
+	// (bad) destination, not an ssh option such as -oProxyCommand.
+	return exec.CommandContext(ctx, "ssh", append(args, "--", dest, cmd)...)
+}
+
+func (t Target) wrap(err error) error {
+	if err == nil {
+		return nil
+	}
+	how := "ssh " + t.Host
+	if t.Local {
+		how = "on this box"
+	} else if t.IAP {
+		how = "gcloud compute ssh --tunnel-through-iap"
+	}
+	return fmt.Errorf("%s: %w", how, err)
 }
 
 // WaitReachable retries a no-op SSH until it connects or timeout passes: a box

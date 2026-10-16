@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -217,6 +218,20 @@ func TestStatusLine(t *testing.T) {
 	if strings.Contains(out, "no ADC") || strings.Contains(out, "12%\x1b[0m \x1b") {
 		t.Errorf("unexpected segment in %q", out)
 	}
+	// A project root holding repos, one with changes.
+	proj := filepath.Join(dir, "proj")
+	for _, r := range []string{"a", "b"} {
+		if out, err := exec.Command("git", "init", "-q", filepath.Join(proj, r)).CombinedOutput(); err != nil {
+			t.Fatal(string(out))
+		}
+	}
+	if err := os.WriteFile(filepath.Join(proj, "b", "new"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out = run(`{"workspace":{"current_dir":"` + proj + `","project_dir":"` + proj + `"}}`)
+	if !strings.Contains(out, "2 repos\x1b[0m \x1b[33m1*") {
+		t.Errorf("project root: %q", out)
+	}
 }
 
 func TestGcloudAdopt(t *testing.T) {
@@ -324,6 +339,196 @@ func TestMakeLintCoversBoxScripts(t *testing.T) {
 		}
 		if !strings.Contains(string(mk), strings.TrimPrefix(f.src, "box/")) {
 			t.Errorf("%s is not in the Makefile's SCRIPTS or PYTHON", f.src)
+		}
+	}
+}
+
+// devbox-project and devbox-sessions against a /srv/code in a temp directory,
+// with real git and fakes for tmux and the session script.
+func TestDevboxProject(t *testing.T) {
+	for _, tool := range []string{"jq", "git"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " not installed")
+		}
+	}
+	dir := t.TempDir()
+	write := func(p, s string, mode os.FileMode) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readF := func(p string) string {
+		b, _ := os.ReadFile(p)
+		return string(b)
+	}
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	code := filepath.Join(dir, "code")
+	claude := filepath.Join(dir, "claude", "projects")
+	script := filepath.Join(dir, "devbox-project")
+	write(script, read("box/devbox-project"), 0o755)
+	write(filepath.Join(dir, "devbox-sessions"), read("box/devbox-sessions"), 0o755)
+	write(filepath.Join(code, ".devbox/enrolled", strconv.Itoa(os.Getuid())), "", 0o644)
+	write(filepath.Join(dir, "bin/tmux"), `#!/bin/bash
+echo "tmux $*" >> "$LOG"
+case $1 in has-session) exit 1 ;; display-message) echo other ;; start-server) cat >/dev/null ;; esac
+exit 0
+`, 0o755)
+	write(filepath.Join(dir, "bin/devbox-sessions"), "#!/bin/bash\necho \"devbox-sessions $*\" >> \"$LOG\"\n", 0o755)
+	env := []string{"PATH=" + filepath.Join(dir, "bin") + ":" + os.Getenv("PATH"), "HOME=" + dir, "USER=me",
+		"DEVBOX_CODE_DIR=" + code, "CLAUDE_CONFIG_DIR=" + filepath.Dir(claude), "LOG=" + filepath.Join(dir, "log"),
+		"GIT_CONFIG_NOSYSTEM=1", "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t"}
+	sh := func(name string, args ...string) (string, error) {
+		c := exec.Command(name, args...)
+		c.Env = env
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := sh(script, args...)
+		if err != nil {
+			t.Fatalf("devbox-project %q: %v\n%s", args, err, out)
+		}
+		return out
+	}
+	refuse := func(want string, args ...string) {
+		t.Helper()
+		if out, err := sh(script, args...); err == nil || !strings.Contains(out, want) {
+			t.Errorf("devbox-project %q: want a refusal with %q, got %v: %s", args, want, err, out)
+		}
+	}
+	// Two upstream repos, each with a commit.
+	for _, r := range []string{"api", "web"} {
+		src := filepath.Join(dir, "up", r)
+		write(filepath.Join(src, "README"), r, 0o644)
+		for _, a := range [][]string{{"init", "-q", "-b", "main"}, {"add", "."}, {"commit", "-qm", "init"}} {
+			if out, err := sh("git", append([]string{"-C", src}, a...)...); err != nil {
+				t.Fatalf("git %v: %v %s", a, err, out)
+			}
+		}
+	}
+	envOf := func(p string) map[string]string {
+		t.Helper()
+		var s struct{ Env map[string]string }
+		if err := json.Unmarshal([]byte(readF(p)), &s); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		return s.Env
+	}
+	acme := filepath.Join(code, "acme")
+	mangle := func(p string) string {
+		return strings.Map(func(r rune) rune {
+			if r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+				return r
+			}
+			return '-'
+		}, p)
+	}
+
+	// add: a new project with its first repo, then a second repo.
+	run("add", filepath.Join(dir, "up/api"), "acme", "api", "K=v")
+	run("add", filepath.Join(dir, "up/web"), "acme", "web")
+	for _, p := range []string{"api/README", "web/README", ".devbox-env"} {
+		if !exists(filepath.Join(acme, p)) {
+			t.Errorf("missing %s", p)
+		}
+	}
+	for _, f := range []string{".claude", "api/.claude", "web/.claude"} {
+		if e := envOf(filepath.Join(acme, f, "settings.local.json")); e["K"] != "v" {
+			t.Errorf("%s env = %v", f, e)
+		}
+	}
+	if x := readF(filepath.Join(acme, "web/.git/info/exclude")); !strings.Contains(x, ".claude/settings.local.json\n") {
+		t.Errorf("web exclude: %q", x)
+	}
+	if out, _ := sh("git", "-C", filepath.Join(acme, "api"), "status", "--porcelain"); out != "" {
+		t.Errorf("api not clean: %q", out)
+	}
+	if md := readF(filepath.Join(acme, "CLAUDE.md")); !strings.Contains(md, "- `api/`") {
+		t.Errorf("CLAUDE.md: %q", md)
+	}
+	// set reaches every repo, including a removal.
+	run("set", "acme", "-K", "L=w")
+	if e := envOf(filepath.Join(acme, "web/.claude/settings.local.json")); e["K"] != "" || e["L"] != "w" {
+		t.Errorf("web env after set = %v", e)
+	}
+
+	// init: a directory of repos cloned by hand; repos get no settings while there is no env.
+	hand := filepath.Join(code, "hand")
+	for _, r := range []string{"api", "web"} {
+		if out, err := sh("git", "clone", "-q", filepath.Join(dir, "up", r), filepath.Join(hand, r)); err != nil {
+			t.Fatal(out)
+		}
+	}
+	run("init", "hand")
+	if md := readF(filepath.Join(hand, "CLAUDE.md")); !strings.Contains(md, "- `api/`\n- `web/`\n") {
+		t.Errorf("hand CLAUDE.md: %q", md)
+	}
+	if !exists(filepath.Join(hand, ".claude/settings.local.json")) || exists(filepath.Join(hand, "api/.claude")) {
+		t.Error("init settings: want the root's only")
+	}
+
+	// nest: an old project that is a repo, with a secret ref and Claude Code state.
+	old := filepath.Join(code, "old")
+	if out, err := sh("git", "clone", "-q", filepath.Join(dir, "up/api"), old); err != nil {
+		t.Fatal(out)
+	}
+	write(filepath.Join(old, ".devbox-env"), "X=1\nS=@secret:devbox-old-S\n", 0o600)
+	write(filepath.Join(old, ".claude/settings.local.json"), `{"permissions":{"allow":[]},"env":{"X":"1"}}`, 0o644)
+	write(filepath.Join(claude, mangle(old), "a.jsonl"), `{"cwd":"`+old+`"}`+"\n", 0o644)
+	write(filepath.Join(claude, mangle(old), "memory/MEMORY.md"), "m", 0o644)
+	write(filepath.Join(claude, mangle(old+"/sub"), "b.jsonl"), `{"type":"x"}`+"\n"+`{"cwd":"`+old+`/sub"}`+"\n", 0o644)
+	write(filepath.Join(claude, mangle(old+"-other"), "c.jsonl"), `{"cwd":"`+old+`-other"}`+"\n", 0o644)
+	refuse("is itself a repo", "add", filepath.Join(dir, "up/web"), "old", "web")
+	refuse("already exists", "nest", "old", "acme", "-")
+	refuse("pass --name", "nest", "acme", "acme", "-")
+	refuse("only for a project that is itself a repo", "nest", "acme", "x", "api")
+	refuse("not a project", "nest", "nope", "x", "-")
+	if out := run("secrets", "old"); out != "S devbox-old-S\n" {
+		t.Errorf("secrets: %q", out)
+	}
+	run("nest", "old", "old", "-", "--check")
+	if !exists(filepath.Join(old, ".git")) {
+		t.Fatal("--check moved something")
+	}
+	run("nest", "old", "new", "-", "S=@secret:devbox-new-S")
+	nw := filepath.Join(code, "new")
+	if exists(old) || !exists(filepath.Join(nw, "api/.git")) || exists(filepath.Join(nw, "api/.devbox-env")) {
+		t.Fatal("nest did not move the repo into new/api")
+	}
+	if e := readF(filepath.Join(nw, ".devbox-env")); e != "X=1\nS=@secret:devbox-new-S\n" {
+		t.Errorf("new .devbox-env: %q", e)
+	}
+	if s := readF(filepath.Join(nw, ".claude/settings.local.json")); !strings.Contains(s, "permissions") {
+		t.Errorf("root settings lost the repo's other keys: %s", s)
+	}
+	if !exists(filepath.Join(claude, mangle(nw), "memory/MEMORY.md")) || !exists(filepath.Join(claude, mangle(nw+"/api/sub"), "b.jsonl")) {
+		t.Error("Claude Code state did not follow")
+	}
+	if !exists(filepath.Join(claude, mangle(old+"-other"), "c.jsonl")) {
+		t.Error("another project's Claude Code state moved")
+	}
+	// Rename a project already in the layout.
+	run("nest", "new", "newer", "-")
+	if !exists(filepath.Join(code, "newer/api/.git")) || !exists(filepath.Join(claude, mangle(filepath.Join(code, "newer")), "a.jsonl")) {
+		t.Error("rename did not move the project and its state")
+	}
+	if log := readF(filepath.Join(dir, "log")); !strings.Contains(log, "tmux kill-session -t =new") {
+		t.Errorf("old session not killed: %s", log)
+	}
+
+	// devbox-sessions renders .env into the root and each repo, if asked.
+	write(filepath.Join(acme, ".devbox-env"), "DEVBOX_DOTENV=1\nA=b\n", 0o600)
+	if out, err := sh(filepath.Join(dir, "devbox-sessions")); err != nil {
+		t.Fatal(out)
+	}
+	for _, p := range []string{".env", "api/.env", "web/.env"} {
+		if readF(filepath.Join(acme, p)) != "A=b\n" {
+			t.Errorf("%s: %q", p, readF(filepath.Join(acme, p)))
 		}
 	}
 }
