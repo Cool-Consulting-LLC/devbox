@@ -3,13 +3,15 @@
 # /usr/local/bin/devbox-claude-statusline; in the devbox repo, .claude/statusline.sh
 # is a symlink to this file. Reads the session JSON on stdin and prints one line.
 #
-#   acme-api ⎇ main* ↑1  client-a@acme-prod/europe-west2  adc ✓
+#   acme-api ⎇ main* ↑1  RC  client-a@acme-prod/europe-west2  adc ✓
 #   8%  31% 12% 20%  $0.42 12m +80/-12  Fable 5.1
 #
 # Segments, each omitted when it does not apply, never an error:
 #   - directory (project name cut to its last 7 characters) and git state, or
 #     at a project root that is not a repo, how many repos it holds and how
 #     many have changes
+#   - RC, while Remote Control is connected: Claude Code sets
+#     CLAUDE_CODE_BRIDGE_SESSION_ID for exactly that long, and this inherits it
 #   - in a project session on the box: the gcloud config, project and region
 #     that `devbox project` gave the session
 #   - whether Application Default Credentials exist in that gcloud config,
@@ -97,6 +99,9 @@ else
   fi
 fi
 segments+=("$seg")
+
+# Remote Control: the session can be driven from claude.ai or the phone.
+[ -n "${CLAUDE_CODE_BRIDGE_SESSION_ID:-}" ] && segments+=("${GREEN}RC${RESET}")
 
 # Box, project session: the identity `devbox project` gave this session.
 # CLOUDSDK_CONFIG is the gcloud config directory, so its name is the identity.
