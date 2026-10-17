@@ -31,7 +31,7 @@ func Execute() int {
 	if err := newRoot().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "devbox:", err)
 		if gcp.NeedsLogin(err) {
-			fmt.Fprintln(os.Stderr, "devbox: your Google login expired; run `make auth` (gcloud auth login --update-adc) and retry")
+			fmt.Fprintln(os.Stderr, "devbox: your Google login expired; run `make auth` (gcloud auth login --update-adc --quiet) and retry")
 		}
 		return 1
 	}
@@ -96,7 +96,9 @@ func (g *globals) loadLoggedIn(ctx context.Context) (*box.Box, error) {
 		return b, err
 	}
 	fmt.Fprintln(os.Stderr, "devbox: your Google login is missing or expired; logging in again")
-	args := []string{"auth", "login", "--update-adc"}
+	// --quiet: no "GOOGLE_APPLICATION_CREDENTIALS is set, continue?" prompt
+	// (--gcloud-config sets it). The login itself still reads from the terminal.
+	args := []string{"auth", "login", "--update-adc", "--quiet"}
 	if c, cerr := config.Load(g.configPath); cerr == nil && onBox(c.Name) {
 		args = append(args, "--no-launch-browser") // no browser on the box
 	}
