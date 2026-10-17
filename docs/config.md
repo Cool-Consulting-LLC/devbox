@@ -26,7 +26,7 @@ What does each value in `devbox.yaml` do? One row per key. Absent keys take the 
 | `snapshots.start_time` | string | `03:00` | in-place | Daily snapshot time of the code disk, UTC, on the hour (HH:00). |
 | `snapshots.retention_days` | integer | `14` | in-place | Days each snapshot is kept. Snapshots outlive the disk. |
 | `alerts.email` | string | *(empty)* | in-place | Address of the email notification channel. Empty disables all alerting resources. |
-| `alerts.cpu_high_pct` | integer | `80` | in-place | Alert when CPU stays above this percentage for 5 minutes. |
+| `alerts.cpu_high_pct` | integer | `95` | in-place | Alert when CPU stays above this percentage for 10 minutes. |
 | `alerts.cpu_idle_pct` | integer | `5` | in-place | Alert when a running box stays below this percentage for 6 hours: something kept it from suspending, or the idle timer is broken. |
 | `alerts.disk_used_pct` | integer | `85` | in-place | Alert when /srv/code is fuller than this percentage. |
 | `idle_suspend.enabled` | bool | `true` | reprovision | Suspend the box after a period with no keyboard input, no Claude Code turn in progress and no non-interactive SSH session. |

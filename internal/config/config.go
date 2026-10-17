@@ -83,7 +83,7 @@ type Snapshots struct {
 
 type Alerts struct {
 	Email       string `yaml:"email" describe:"Address of the email notification channel. Empty disables all alerting resources." tier:"in-place"`
-	CPUHighPct  int    `yaml:"cpu_high_pct" describe:"Alert when CPU stays above this percentage for 5 minutes." tier:"in-place" default:"80"`
+	CPUHighPct  int    `yaml:"cpu_high_pct" describe:"Alert when CPU stays above this percentage for 10 minutes." tier:"in-place" default:"95"`
 	CPUIdlePct  int    `yaml:"cpu_idle_pct" describe:"Alert when a running box stays below this percentage for 6 hours: something kept it from suspending, or the idle timer is broken." tier:"in-place" default:"5"`
 	DiskUsedPct int    `yaml:"disk_used_pct" describe:"Alert when /srv/code is fuller than this percentage." tier:"in-place" default:"85"`
 }
@@ -113,7 +113,7 @@ func Defaults() *Config {
 		Tailscale:   Tailscale{Tag: "tag:devbox", OAuthSecret: "devbox-tailscale-oauth"},
 		SSHKey:      SSHKey{Secret: "devbox-ssh-key"},
 		Snapshots:   Snapshots{StartTime: "03:00", RetentionDays: 14},
-		Alerts:      Alerts{CPUHighPct: 80, CPUIdlePct: 5, DiskUsedPct: 85},
+		Alerts:      Alerts{CPUHighPct: 95, CPUIdlePct: 5, DiskUsedPct: 85},
 		Idle:        IdleSuspend{Enabled: boolPtr(true), AfterMinutes: 60},
 	}
 }

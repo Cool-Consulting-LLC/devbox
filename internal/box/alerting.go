@@ -29,8 +29,8 @@ func (b *Box) alertSpecs(instanceID uint64) []alertSpec {
 	disk := fmt.Sprintf(`resource.type = "gce_instance" AND resource.labels.instance_id = "%s" AND metric.type = "agent.googleapis.com/disk/percent_used" AND metric.labels.state = "used" AND metric.labels.device = monitoring.regex.full_match("(/dev/)?sdb1?")`, id)
 	a := b.C.Alerts
 	return []alertSpec{
-		{"cpu-high", "CPU high", "The box has been above the CPU threshold for 5 minutes. It is undersized for what you are doing.",
-			cpu, "COMPARISON_GT", float64(a.CPUHighPct) / 100, "300s"},
+		{"cpu-high", "CPU high", "The box has been above the CPU threshold for 10 minutes. It is undersized for what you are doing.",
+			cpu, "COMPARISON_GT", float64(a.CPUHighPct) / 100, "600s"},
 		{"cpu-idle", "CPU idle for 6 hours without suspending", "A running box has been idle for 6 hours. With idle suspend on, either something kept the box busy or the idle timer is broken. On the box, `cat /run/devbox-idle.status` shows what the last check counted (keyboard input, Claude Code turns, non-interactive SSH); `systemctl status devbox-idle.timer` shows whether it runs.",
 			cpu, "COMPARISON_LT", float64(a.CPUIdlePct) / 100, "21600s"},
 		{"disk-full", "/srv/code filling up", "The code disk is above the threshold. Grow it with code_disk_gb and `devbox apply`, then `devbox reprovision`.",

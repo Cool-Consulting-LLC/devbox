@@ -166,7 +166,7 @@ func TestAlertSpecs(t *testing.T) {
 			t.Errorf("%s: identical policies differ", s.key)
 		}
 	}
-	if specs[0].threshold != 0.8 || specs[1].threshold != 0.05 || specs[2].threshold != 85 {
+	if specs[0].threshold != 0.95 || specs[1].threshold != 0.05 || specs[2].threshold != 85 {
 		t.Fatalf("thresholds: CPU is a 0-1 fraction, disk a percentage: %v %v %v", specs[0].threshold, specs[1].threshold, specs[2].threshold)
 	}
 }
