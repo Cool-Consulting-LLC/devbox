@@ -54,6 +54,7 @@ var boxFiles = []boxFile{
 	{"box/rootlesskit.apparmor", "/etc/apparmor.d/usr.bin.rootlesskit", "0644"},
 	{"box/skel/.bashrc", "/etc/skel/.bashrc", "0644"},
 	{"box/skel/.gitconfig", "/etc/skel/.gitconfig", "0644"},
+	{"box/skel/.vimrc", "/etc/skel/.vimrc", "0644"},
 	{"box/skel/.ssh/config", "/etc/skel/.ssh/config", "0600"},
 }
 

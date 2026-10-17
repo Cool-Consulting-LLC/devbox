@@ -99,6 +99,19 @@ func TestPythonCompiles(t *testing.T) {
 	}
 }
 
+// Silent Ex mode exits 1 on any error while sourcing the vimrc. HOME is a temp
+// directory because the vimrc creates ~/.vim/undo.
+func TestVimrcLoads(t *testing.T) {
+	if _, err := exec.LookPath("vim"); err != nil {
+		t.Skip("vim not installed")
+	}
+	c := exec.Command("vim", "-Nu", "files/box/skel/.vimrc", "-i", "NONE", "-Es", "+qa!")
+	c.Env = append(os.Environ(), "HOME="+t.TempDir())
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Errorf("vim reported errors loading .vimrc: %v %s", err, out)
+	}
+}
+
 func TestManagedSettings(t *testing.T) {
 	var ms struct {
 		StatusLine struct{ Command string } `json:"statusLine"`
@@ -342,7 +355,8 @@ func TestMakeLintCoversBoxScripts(t *testing.T) {
 		case ".json", ".conf", ".service", ".apparmor":
 			continue
 		}
-		if strings.HasSuffix(f.src, "/.ssh/config") || strings.HasSuffix(f.src, "/.gitconfig") {
+		if strings.HasSuffix(f.src, "/.ssh/config") || strings.HasSuffix(f.src, "/.gitconfig") ||
+			strings.HasSuffix(f.src, "/.vimrc") {
 			continue
 		}
 		if !strings.Contains(string(mk), strings.TrimPrefix(f.src, "box/")) {

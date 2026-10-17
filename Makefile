@@ -74,6 +74,7 @@ diff-dotfiles: ## Diff the box's dotfiles against the originals in $(DOTFILES)
 	-diff -u $(DOTFILES)/.bashrc $(SKEL)/.bashrc
 	-diff -u $(DOTFILES)/.ssh/config $(SKEL)/.ssh/config
 	-diff -u $(DOTFILES)/.gitconfig $(SKEL)/.gitconfig
+	-diff -u $(DOTFILES)/.vimrc $(SKEL)/.vimrc
 	-diff -u $(DOTFILES)/.tmux.conf $(GITROOT)/internal/assets/files/box/tmux.conf
 
 ##@ Build
@@ -105,4 +106,4 @@ clean: ## Remove ./devbox and dist/
 # so both are needed: the CLI for the README's gcloud commands, ADC for devbox.
 # --update-adc writes both from one browser round trip.
 auth: ## Log in to gcloud and create Application Default Credentials
-	gcloud auth login --update-adc
+	gcloud auth login --update-adc --quiet
