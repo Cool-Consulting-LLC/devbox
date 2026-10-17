@@ -1,0 +1,12 @@
+# /etc/systemd/user/docker-prune.timer, written by provision.sh. Enabled for
+# every user; Persistent catches up on a run missed while the box slept.
+[Unit]
+Description=Prune rootless Docker weekly
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

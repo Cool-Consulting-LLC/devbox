@@ -1,0 +1,15 @@
+# /etc/systemd/user/docker-prune.service, written by provision.sh. Run weekly
+# by docker-prune.timer, so rootless Docker's data in ~/.local/share/docker
+# does not fill the boot disk. Only what rebuilds on its own: build cache
+# unused for a week, and dangling images that a newer build replaced. Tagged
+# images, containers and volumes stay.
+[Unit]
+Description=Prune the rootless Docker build cache and dangling images
+After=docker.service
+ConditionPathExists=%t/docker.sock
+
+[Service]
+Type=oneshot
+Environment=DOCKER_HOST=unix://%t/docker.sock
+ExecStart=/usr/bin/docker builder prune --force --filter until=168h
+ExecStart=/usr/bin/docker image prune --force

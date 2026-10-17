@@ -277,12 +277,14 @@ systemctl disable --now docker.socket docker.service containerd.service 2>/dev/n
 systemctl mask docker.socket docker.service containerd.service
 rm -f /run/docker.sock   # left by the socket unit, which does not remove it on stop
 apparmor_parser -r /etc/apparmor.d/usr.bin.rootlesskit
-systemctl --global enable docker.service
+systemctl --global enable docker.service docker-prune.timer
 # Lingering admins' user managers are already up; start their daemons now.
 for u in "${docker_users[@]}"; do
   systemctl --user -M "$u@" daemon-reload &&
     systemctl --user -M "$u@" start docker.service ||
     echo "WARNING: rootless Docker did not start for $u" >&2
+  systemctl --user -M "$u@" start docker-prune.timer ||
+    echo "WARNING: could not start the Docker prune timer for $u" >&2
   # profile.sh's DOCKER_HOST reaches login shells only; a context in
   # ~/.docker/config.json reaches every docker client, Claude Code's shells too.
   home=$(getent passwd "$u" | cut -d: -f6) || continue

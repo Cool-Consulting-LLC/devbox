@@ -352,7 +352,7 @@ func TestMakeLintCoversBoxScripts(t *testing.T) {
 	}
 	for _, f := range boxFiles {
 		switch filepath.Ext(f.src) {
-		case ".json", ".conf", ".service", ".apparmor":
+		case ".json", ".conf", ".service", ".timer", ".apparmor":
 			continue
 		}
 		if strings.HasSuffix(f.src, "/.ssh/config") || strings.HasSuffix(f.src, "/.gitconfig") ||
