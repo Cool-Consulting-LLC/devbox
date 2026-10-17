@@ -98,14 +98,22 @@ gcloud_check() {
   echo "then: devbox-sessions --recreate $(basename "$1" | tr . _)" >&2
 }
 
-# claude_md DIR: a CLAUDE.md for the project root, which is not a repo, so that
-# Claude Code started there knows where the repos are. Written once; yours after.
+# claude_md DIR [REPO]: a CLAUDE.md for the project root, which is not a repo, so
+# that Claude Code started there knows where the repos are. A link to REPO's own
+# CLAUDE.md if it has one, so that git tracks it; else written once, yours after.
+# Claude Code loads a linked file once, though it is above the repo too.
 claude_md() {
   local dir=$1 r
-  if [ -f "$dir/CLAUDE.md" ]; then
+  if [ -e "$dir/CLAUDE.md" ] || [ -L "$dir/CLAUDE.md" ]; then
     for r in "${@:2}"; do
-      grep -qF "\`$r/\`" "$dir/CLAUDE.md" || echo "add $r/ to $dir/CLAUDE.md"
+      [ "$(readlink "$dir/CLAUDE.md")" = "$r/CLAUDE.md" ] && continue
+      grep -qF "\`$r/\`" "$dir/CLAUDE.md" 2>/dev/null || echo "add $r/ to $dir/CLAUDE.md"
     done
+    return 0
+  fi
+  if [ -n "${2:-}" ] && [ -f "$dir/$2/CLAUDE.md" ]; then
+    ln -s "$2/CLAUDE.md" "$dir/CLAUDE.md"
+    echo "linked $dir/CLAUDE.md to $2/CLAUDE.md"
     return 0
   fi
   {

@@ -427,6 +427,9 @@ exit 0
 	for _, r := range []string{"api", "web"} {
 		src := filepath.Join(dir, "up", r)
 		write(filepath.Join(src, "README"), r, 0o644)
+		if r == "web" {
+			write(filepath.Join(src, "CLAUDE.md"), "# web\n", 0o644)
+		}
 		for _, a := range [][]string{{"init", "-q", "-b", "main"}, {"add", "."}, {"commit", "-qm", "init"}} {
 			if out, err := sh("git", append([]string{"-C", src}, a...)...); err != nil {
 				t.Fatalf("git %v: %v %s", a, err, out)
@@ -472,6 +475,17 @@ exit 0
 	}
 	if md := readF(filepath.Join(acme, "CLAUDE.md")); !strings.Contains(md, "- `api/`") {
 		t.Errorf("CLAUDE.md: %q", md)
+	}
+	// add: a first repo with its own CLAUDE.md is linked to, and needs no listing.
+	run("add", filepath.Join(dir, "up/web"), "lnk", "web")
+	if l, err := os.Readlink(filepath.Join(code, "lnk/CLAUDE.md")); err != nil || l != "web/CLAUDE.md" {
+		t.Errorf("lnk CLAUDE.md link = %q, %v", l, err)
+	}
+	if out := run("add", filepath.Join(dir, "up/web"), "lnk", "web"); strings.Contains(out, "add web/") {
+		t.Errorf("re-add asks to list the linked repo: %q", out)
+	}
+	if out := run("add", filepath.Join(dir, "up/api"), "lnk", "api"); !strings.Contains(out, "add api/ to") {
+		t.Errorf("second repo not flagged: %q", out)
 	}
 	// set reaches every repo, including a removal.
 	run("set", "acme", "-K", "L=w")

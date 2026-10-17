@@ -116,7 +116,7 @@ When your Google login expires, `./devbox up` logs you in again first, as `make 
 ./devbox project secret acme OPENAI_API_KEY          # prompts; stored in Secret Manager
 ```
 
-A project is a directory under `/srv/code` with its own tmux session, variables and secrets. Its repos, one or many, are subdirectories: here `/srv/code/acme/api` and `/srv/code/acme/web`. Start `claude` in the project root, where the session starts, so that one Claude Code session and its memory cover every repo. `devbox project add` writes a `CLAUDE.md` there listing the repos; say in it what each one is for.
+A project is a directory under `/srv/code` with its own tmux session, variables and secrets. Its repos, one or many, are subdirectories: here `/srv/code/acme/api` and `/srv/code/acme/web`. Start `claude` in the project root, where the session starts, so that one Claude Code session and its memory cover every repo. `devbox project add` writes a `CLAUDE.md` there listing the repos; say in it what each one is for. If the first repo you add has a `CLAUDE.md` of its own, the project's is a link to it instead, so git tracks it.
 
 Secrets are read from Secret Manager into the session's environment, never written to disk. After adding a secret, run `devbox-sessions --recreate acme` on the box. Log a gcloud config in with `devbox-gcloud-login client-a` on the box.
 

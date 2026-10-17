@@ -159,7 +159,8 @@ func projectAddCmd(g *globals) *cobra.Command {
 		Short: "Clone a repo into a project, creating the project if needed",
 		Long: `Clones <repo> into /srv/code/<project>/<repo>/ with the box's machine key.
 If the project is new, this creates it: .devbox-env from the flags, a CLAUDE.md
-stub for the project root, and the project's tmux session. Flags given for a
+for the project root, and the project's tmux session. That CLAUDE.md is a link
+to the repo's own if it has one, so git tracks it; else a stub. Flags given for a
 project that exists are added to its variables, as ` + "`devbox project set`" + ` does.
 
 The same non-secret variables go into .claude/settings.local.json in the project
