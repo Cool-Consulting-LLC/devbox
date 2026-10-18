@@ -2,6 +2,8 @@
 
 A Claude Code workstation in your own GCP project, reachable over your tailnet, built and torn down by one static binary. No Terraform, no state file.
 
+![iTerm2 with a laptop shell running devbox up and five mosh panes into the box, each a project's tmux session with Claude Code or bash](screenshot.jpg)
+
 ## Overview
 
 `devbox` makes a GCP project match `devbox.yaml`: an Ubuntu VM you reach over Tailscale SSH or mosh, with Claude Code, `gh`, Terraform, Go, Node, uv, ruff, pytest and rootless Docker installed. Your work lives on `/srv/code`, a separate disk that is snapshotted daily and survives rebuilds. The box suspends itself after an hour idle and keeps its memory, so tmux and Claude Code sessions survive. It costs about $12 a month while suspended and about 15¢ an hour while running; see [Costs](#costs).
