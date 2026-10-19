@@ -38,23 +38,11 @@ You need a GCP project where you are owner, a Tailscale account, a GitHub accoun
 
 ```bash
 make setup     # builds ./devbox and creates devbox.yaml from devbox.example.yaml
-make auth      # gcloud login, plus the Application Default Credentials the binary uses
 ```
 
-In `devbox.yaml`, set `project_id`, `git.name`, `git.email` and `alerts.email`. Every key is in [docs/config.md](docs/config.md).
+In `devbox.yaml`, set `project_id`, `git.name`, `git.email` and `alerts.email`. Every key is in [docs/config.md](docs/config.md). Every `devbox` command logs you in to Google first when you are not, as `make auth` does.
 
-### 2. Network
-
-Give the box a network of its own. GCP's `default` network opens SSH to the internet, and devbox refuses to use it.
-
-```bash
-P=YOUR-PROJECT
-gcloud compute networks create devbox --project $P --subnet-mode=custom
-gcloud compute networks subnets create devbox-europe-west4 --project $P --network devbox \
-  --region europe-west4 --range 10.10.0.0/24 --enable-private-ip-google-access
-```
-
-### 3. Tailscale
+### 2. Tailscale
 
 In the access controls JSON editor, add the following, with your Tailscale login and your login name on the box. `./devbox preflight` prints the SSH rule with your values filled in.
 
@@ -68,34 +56,27 @@ In the access controls JSON editor, add the following, with your Tailscale login
 Then create an OAuth client under Settings → Trust credentials, with scope **Auth Keys (write)** and tag `tag:devbox`, and store its secret:
 
 ```bash
-printf '%s' 'PASTE-THE-SECRET' | gcloud secrets create devbox-tailscale-oauth --data-file=- --labels=devbox=devbox
+./devbox secret tailscale     # paste it at the hidden prompt
 ```
 
-### 4. Machine key
+### 3. Machine key
 
 ```bash
-ssh-keygen -t ed25519 -N '' -C 'devbox' -f devbox_ed25519
-gcloud secrets create devbox-ssh-key --data-file=devbox_ed25519 --labels=devbox=devbox
-gh auth refresh -s admin:public_key,admin:ssh_signing_key
-gh ssh-key add devbox_ed25519.pub --type authentication --title devbox
-gh ssh-key add devbox_ed25519.pub --type signing --title devbox
-gcloud secrets versions access latest --secret devbox-ssh-key >/dev/null && shred -u devbox_ed25519 devbox_ed25519.pub
+./devbox secret ssh-key       # generates the key, stores it, adds it to GitHub to authenticate and sign
 ```
 
-### 5. Create the box
+The key is made in memory and goes only to Secret Manager; no key file is written. `gh` asks for the `admin:public_key` and `admin:ssh_signing_key` scopes if it lacks them.
+
+### 4. Create the box
 
 ```bash
-./devbox preflight --fix     # checks everything; --fix enables missing APIs
-./devbox up
+./devbox preflight --fix     # checks everything; enables missing APIs and creates the network
+./devbox up                  # creates the box, waits for provisioning, logs you in once
 ```
 
-Provisioning takes about 3 minutes. Log in once through IAP, which creates your account on the box:
+`--fix` gives the box a network of its own, `devbox` with subnet `devbox-europe-west4` (10.10.0.0/24), if they don't exist. GCP's `default` network opens SSH to the internet, and devbox refuses to use it.
 
-```bash
-gcloud compute ssh devbox --zone europe-west4-a --tunnel-through-iap
-```
-
-From then on, use Tailscale. Run `claude` on the box and log in.
+Provisioning takes about 3 minutes, and `up` shows its log. It then logs you in once through IAP, which creates your account on the box. From then on, use Tailscale. Run `claude` on the box and log in.
 
 ## How to use it
 
@@ -108,19 +89,19 @@ mosh you@devbox -- ta main                    # or: ssh you@devbox
 
 If `ssh` hangs, the box has suspended itself: run `./devbox up`.
 
-When your Google login expires, `./devbox up` logs you in again first, as `make auth` does. It then passes the fresh login to every gcloud config on the box that is logged in as the same account, so you don't log in there again. Configs for other accounts still need `devbox-gcloud-login` on the box. The box needs `devbox-gcloud-adopt`, so run `./devbox reprovision` once after updating.
+When your Google login expires, every `./devbox` command logs you in again first, as `make auth` does. `./devbox up` then passes the fresh login to every gcloud config on the box that is logged in as the same account, so you don't log in there again. Configs for other accounts still need `devbox-gcloud-login` on the box. The box needs `devbox-gcloud-adopt`, so run `./devbox reprovision` once after updating.
 
 ### Projects
 
 ```bash
 ./devbox project add git@github.com:acme/api.git --project acme --gcloud-config client-a --gcp-project acme-prod
 ./devbox project add git@github.com:acme/web.git --project acme
-./devbox project secret acme OPENAI_API_KEY          # prompts; stored in Secret Manager
+./devbox project secret acme OPENAI_API_KEY --recreate   # prompts; stored in Secret Manager; restarts the session
 ```
 
 A project is a directory under `/srv/code` with its own tmux session, variables and secrets. Its repos, one or many, are subdirectories: here `/srv/code/acme/api` and `/srv/code/acme/web`. Start `claude` in the project root, where the session starts, so that one Claude Code session and its memory cover every repo. `devbox project add` writes a `CLAUDE.md` there listing the repos; say in it what each one is for. If the first repo you add has a `CLAUDE.md` of its own, the project's is a link to it instead, so git tracks it.
 
-Secrets are read from Secret Manager into the session's environment, never written to disk. After adding a secret, run `devbox-sessions --recreate acme` on the box. Log a gcloud config in with `devbox-gcloud-login client-a` on the box.
+Secrets are read from Secret Manager into the session's environment when it starts, never written to disk. `--recreate` restarts the project's session so it has the new secret, killing whatever runs there. Without it, run `devbox-sessions --recreate acme` on the box when convenient. Log a gcloud config in with `devbox-gcloud-login client-a` on the box.
 
 The non-secret variables also go into `.claude/settings.local.json`, in the project root and in each repo, for Claude Code started outside the session. Claude Code reads that file from the git root it starts in, never from a parent directory, hence the copies.
 
@@ -130,26 +111,22 @@ The non-secret variables also go into `.claude/settings.local.json`, in the proj
 ### Changing the box
 
 - Edit `devbox.yaml` or the files under `internal/assets/files/`, then run `make build`.
-- Run `./devbox reprovision` for most changes. It reruns provisioning in place, and nothing is lost.
-- Run `./devbox apply` for changes to the machine type, cloud-init or network. These restart or replace the VM. `--dry-run` shows the plan first. `/srv/code` always survives.
-- [docs/config.md](docs/config.md) says which keys need which.
+- Run `./devbox apply`. It changes what differs, then reprovisions in place if provisioning changed, and nothing is lost. Changes to the machine type, cloud-init or network restart or replace the VM, and it asks first. `--dry-run` shows the plan first. `/srv/code` always survives.
+- `./devbox reprovision` reruns provisioning alone, changed or not.
+- [docs/config.md](docs/config.md) says which keys need what.
 
 If the tailnet is down, add `--iap`. If a new box hasn't joined the tailnet within an hour, run `./devbox reprovision --iap --rejoin`.
 
 ### Sudo
 
-By default nobody can sudo. To allow it with a password, store a crypt hash of one and name the secret in `devbox.yaml`:
-
-```bash
-openssl passwd -6 | gcloud secrets create devbox-sudo-password-hash --data-file=-   # OpenSSL 3; on a Mac, Homebrew's
-```
+By default nobody can sudo. To allow it with a password, name a secret for its hash in `devbox.yaml`:
 
 ```yaml
 sudo:
   password_secret: devbox-sudo-password-hash
 ```
 
-Then run `./devbox apply` and `./devbox reprovision`. You can then sudo anything after typing the password, and it asks every time. Agents can't type it, but they run as you, so a hostile one could plant a fake `sudo` and catch the password the next time you type it. The hash is readable on the box, so use a long password. To rotate it, add a new version of the secret and reprovision. To turn it off, set the key back to `""`.
+Then run `./devbox secret sudo`. It asks for the password twice, stores its SHA-512 crypt hash, and reprovisions the box. You can then sudo anything after typing the password, and it asks every time. Agents can't type it, but they run as you, so a hostile one could plant a fake `sudo` and catch the password the next time you type it. The hash is readable on the box, so use a long password. To rotate it, run `./devbox secret sudo` again. To turn it off, set the key back to `""` and run `./devbox apply`.
 
 ### Tearing down
 

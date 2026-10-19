@@ -27,8 +27,8 @@ func (b *Box) SecretExists(ctx context.Context, id string) (bool, error) {
 	return err == nil, err
 }
 
-// Secrets are existence-only: the binary never creates the ones the box needs,
-// because only you hold their contents. It checks for them.
+// Reconciling never creates the secrets the box needs, because only you hold
+// their contents; `devbox secret` stores them. It checks for them.
 func (b *Box) checkSecrets(ctx context.Context, p *Plan) error {
 	ids := []string{b.C.Tailscale.OAuthSecret, b.C.SSHKey.Secret}
 	if b.C.Sudo.PasswordSecret != "" {
@@ -40,7 +40,7 @@ func (b *Box) checkSecrets(ctx context.Context, p *Plan) error {
 			return fmt.Errorf("secret %s: %w", id, err)
 		}
 		if !ok {
-			p.warn("secret %s is missing; provision.sh will fail until it exists (README.md, How to set it up)", id)
+			p.warn("secret %s is missing; provision.sh will fail until it exists (devbox secret --help)", id)
 		}
 	}
 	return nil
@@ -79,11 +79,31 @@ func ProjectSecretID(name, project, key string) (string, error) {
 	return regexp.MustCompile(`[^A-Za-z0-9_-]`).ReplaceAllString(id, "_"), nil
 }
 
-// PutSecret creates the secret if needed and adds value as its newest version.
-// Returns true when the secret already existed (a rotation).
+// PutSecret stores a project's secret and lets the box read it. Returns true
+// when the secret already existed (a rotation).
 func (b *Box) PutSecret(ctx context.Context, id, project string, value []byte) (bool, error) {
+	existed, err := b.putSecret(ctx, id, map[string]string{config.LabelKey: b.C.Name, "devbox-project": labelValue(project)}, value)
+	if err != nil {
+		return existed, err
+	}
+	return existed, b.grantIfSA(ctx, id)
+}
+
+// PutBoxSecret stores one of the secrets devbox.yaml names: the Tailscale OAuth
+// secret, the machine key or the sudo password hash. The box gets standing read
+// access to each except the Tailscale one, which it reads only while joining.
+func (b *Box) PutBoxSecret(ctx context.Context, id string, value []byte) (bool, error) {
+	existed, err := b.putSecret(ctx, id, map[string]string{config.LabelKey: b.C.Name}, value)
+	if err != nil || id == b.C.Tailscale.OAuthSecret {
+		return existed, err
+	}
+	return existed, b.grantIfSA(ctx, id)
+}
+
+// putSecret creates the secret if needed and adds value as its newest version.
+func (b *Box) putSecret(ctx context.Context, id string, labels map[string]string, value []byte) (bool, error) {
 	_, err := b.G.Secrets.Projects.Secrets.Create("projects/"+b.C.ProjectID, &secretmanager.Secret{
-		Labels:      map[string]string{config.LabelKey: b.C.Name, "devbox-project": labelValue(project)},
+		Labels:      labels,
 		Replication: &secretmanager.Replication{Automatic: &secretmanager.Automatic{}},
 	}).SecretId(id).Context(ctx).Do()
 	existed := gcp.IsConflict(err)
@@ -99,12 +119,16 @@ func (b *Box) PutSecret(ctx context.Context, id, project string, value []byte) (
 	if existed {
 		b.disableOldVersions(ctx, id)
 	}
-	// Without its service account there is nobody to grant yet; `devbox up`
-	// grants every labelled secret when it creates one.
+	return existed, nil
+}
+
+// grantIfSA lets the box read the secret. Without its service account there is
+// nobody to grant yet; `devbox up` grants the box's secrets when it creates one.
+func (b *Box) grantIfSA(ctx context.Context, id string) error {
 	if sa, err := b.getSA(ctx); err != nil || sa == nil {
-		return existed, err
+		return err
 	}
-	return existed, b.grantSecret(ctx, id)
+	return b.grantSecret(ctx, id)
 }
 
 // disableOldVersions leaves only the newest version enabled after a rotation. Best effort.

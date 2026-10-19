@@ -135,3 +135,46 @@ func (b *Box) planFirewalls(ctx context.Context, p *Plan) error {
 	}
 	return nil
 }
+
+// SubnetRange is the range `devbox preflight --fix` gives a subnet it creates.
+const SubnetRange = "10.10.0.0/24"
+
+// EnsureNetwork creates the network and subnet devbox.yaml names when they are
+// missing: a custom-mode network with no firewall rules, so nothing reaches the
+// box but what devbox opens, and a subnet with Private Google Access. It never
+// changes or deletes an existing one. Returns what it created.
+func (b *Box) EnsureNetwork(ctx context.Context) ([]string, error) {
+	var made []string
+	_, err := b.G.Compute.Networks.Get(b.C.ProjectID, b.C.Network.Name).Context(ctx).Do()
+	if gcp.IsNotFound(err) {
+		err = b.G.Await(ctx)(b.G.Compute.Networks.Insert(b.C.ProjectID, &compute.Network{
+			Name:                  b.C.Network.Name,
+			Description:           b.managedDesc() + "network created by devbox preflight --fix. Never deleted by devbox.",
+			AutoCreateSubnetworks: false,
+			ForceSendFields:       []string{"AutoCreateSubnetworks"},
+		}).Context(ctx).Do())
+		if err == nil {
+			made = append(made, "network "+b.C.Network.Name)
+		}
+	}
+	if err != nil {
+		return made, fmt.Errorf("network %s: %w", b.C.Network.Name, err)
+	}
+	_, err = b.G.Compute.Subnetworks.Get(b.C.ProjectID, b.C.Region(), b.C.Network.Subnet).Context(ctx).Do()
+	if gcp.IsNotFound(err) {
+		err = b.G.Await(ctx)(b.G.Compute.Subnetworks.Insert(b.C.ProjectID, b.C.Region(), &compute.Subnetwork{
+			Name:                  b.C.Network.Subnet,
+			Description:           b.managedDesc() + "subnet created by devbox preflight --fix. Never deleted by devbox.",
+			Network:               b.networkURL(),
+			IpCidrRange:           SubnetRange,
+			PrivateIpGoogleAccess: true,
+		}).Context(ctx).Do())
+		if err == nil {
+			made = append(made, fmt.Sprintf("subnet %s %s", b.C.Network.Subnet, SubnetRange))
+		}
+	}
+	if err != nil {
+		return made, fmt.Errorf("subnet %s: %w", b.C.Network.Subnet, err)
+	}
+	return made, nil
+}

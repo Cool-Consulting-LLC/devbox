@@ -63,7 +63,8 @@ type PreflightResult struct {
 	PosixUser string
 }
 
-// Preflight is a read-only survey. With fix, it enables missing APIs and nothing else.
+// Preflight is a read-only survey. With fix, it enables missing APIs and creates
+// a missing network and subnet, and nothing else.
 func (b *Box) Preflight(ctx context.Context, fix bool, w io.Writer) (*PreflightResult, error) {
 	res := &PreflightResult{OK: true}
 	var checks []check
@@ -139,17 +140,17 @@ func (b *Box) Preflight(ctx context.Context, fix bool, w io.Writer) (*PreflightR
 		add(check{"os admin login", "", stFail, "grant yourself roles/compute.osAdminLogin: only admins get /srv/code and the machine key"})
 	}
 
-	b.checkNetwork(ctx, add)
+	b.checkNetwork(ctx, fix, add)
 	b.checkExposure(ctx, add)
 	b.checkOrgPolicies(ctx, add)
 	b.checkMachine(ctx, add)
 
 	secrets := []struct{ id, hint string }{
-		{b.C.Tailscale.OAuthSecret, "create it: README.md, How to set it up, step 3"},
-		{b.C.SSHKey.Secret, "create it: README.md, How to set it up, step 4"},
+		{b.C.Tailscale.OAuthSecret, "run `devbox secret tailscale` (README.md, How to set it up, step 2)"},
+		{b.C.SSHKey.Secret, "run `devbox secret ssh-key` (README.md, How to set it up, step 3)"},
 	}
 	if b.C.Sudo.PasswordSecret != "" {
-		secrets = append(secrets, struct{ id, hint string }{b.C.Sudo.PasswordSecret, "create it: README.md, Sudo"})
+		secrets = append(secrets, struct{ id, hint string }{b.C.Sudo.PasswordSecret, "run `devbox secret sudo` (README.md, Sudo)"})
 	}
 	for _, s := range secrets {
 		ok, err := b.SecretExists(ctx, s.id)
@@ -231,21 +232,35 @@ func (b *Box) checkAPIs(ctx context.Context, fix bool, add func(check)) {
 	add(check{"apis", "enabled " + strings.Join(missing, ", "), stFixed, ""})
 }
 
-func (b *Box) checkNetwork(ctx context.Context, add func(check)) {
+func (b *Box) checkNetwork(ctx context.Context, fix bool, add func(check)) {
 	if _, err := b.G.Compute.Zones.Get(b.C.ProjectID, b.C.Zone).Context(ctx).Do(); err != nil {
 		add(check{"zone/region", b.C.Zone, stFail, short(err)})
 		return
 	}
 	add(check{"zone/region", b.C.Zone + " / " + b.C.Region(), stOK, ""})
 
+	if fix {
+		made, err := b.EnsureNetwork(ctx)
+		if len(made) > 0 {
+			add(check{"network", "created " + strings.Join(made, ", "), stFixed, ""})
+		}
+		if err != nil {
+			add(check{"network", b.C.Network.Name + " / " + b.C.Network.Subnet, stFail, short(err)})
+			return
+		}
+	}
 	if _, err := b.G.Compute.Networks.Get(b.C.ProjectID, b.C.Network.Name).Context(ctx).Do(); err != nil {
-		add(check{"network", b.C.Network.Name, stFail, short(err)})
+		hint := short(err)
+		if gcp.IsNotFound(err) {
+			hint = "run `devbox preflight --fix` to create it and its subnet"
+		}
+		add(check{"network", b.C.Network.Name, stFail, hint})
 		return
 	}
 	sub, err := b.G.Compute.Subnetworks.Get(b.C.ProjectID, b.C.Region(), b.C.Network.Subnet).Context(ctx).Do()
 	if err != nil {
 		add(check{"network", b.C.Network.Name + " / " + b.C.Network.Subnet, stFail,
-			fmt.Sprintf("no subnet %q in %s: the zone must be inside the subnet's region (%s)", b.C.Network.Subnet, b.C.Region(), short(err))})
+			fmt.Sprintf("no subnet %q in %s: the zone must be inside the subnet's region, or `devbox preflight --fix` creates it (%s)", b.C.Network.Subnet, b.C.Region(), short(err))})
 		return
 	}
 	if gcp.Last(sub.Network) != b.C.Network.Name {
@@ -301,7 +316,7 @@ func (b *Box) checkExposure(ctx context.Context, add func(check)) {
 	}
 }
 
-const exposureHint = "these rules open the box to the internet. Delete them, scope them with target tags, or use a dedicated network (README.md, step 2)"
+const exposureHint = "these rules open the box to the internet. Delete them, scope them with target tags, or set network.name to a network of its own, which `devbox preflight --fix` creates"
 
 func (b *Box) exposure(ctx context.Context) (internet, internal []string, err error) {
 	var rules []*compute.Firewall

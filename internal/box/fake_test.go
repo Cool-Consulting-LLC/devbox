@@ -46,6 +46,8 @@ type fakeGCP struct {
 	disks      map[string]*compute.Disk
 	policies   map[string]*compute.ResourcePolicy
 	firewalls  map[string]*compute.Firewall
+	networks   map[string]*compute.Network
+	subnets    map[string]*compute.Subnetwork // region/name
 	snapshots  map[string]*compute.Snapshot
 	sas        map[string]*iam.ServiceAccount
 	roles      map[string]*iam.Role
@@ -64,6 +66,7 @@ func newFake(t *testing.T) *fakeGCP {
 		instances: map[string]*compute.Instance{}, instIAM: map[string]*compute.Policy{},
 		disks: map[string]*compute.Disk{}, policies: map[string]*compute.ResourcePolicy{},
 		firewalls: map[string]*compute.Firewall{}, snapshots: map[string]*compute.Snapshot{},
+		networks: map[string]*compute.Network{}, subnets: map[string]*compute.Subnetwork{},
 		sas: map[string]*iam.ServiceAccount{}, roles: map[string]*iam.Role{},
 		projPolicy: &crm.Policy{Etag: "e0", Version: 1, Bindings: []*crm.Binding{{Role: "roles/owner", Members: []string{"user:me@example.com"}}}},
 		secrets:    map[string]*fakeSecret{},
@@ -147,7 +150,8 @@ func last(s string) string { return s[strings.LastIndex(s, "/")+1:] }
 var (
 	reZonal    = regexp.MustCompile(`^projects/[^/]+/zones/([^/]+)/(instances|disks)(?:/([^/]+))?(?:/([A-Za-z]+))?$`)
 	reRegional = regexp.MustCompile(`^projects/[^/]+/regions/([^/]+)/resourcePolicies(?:/([^/]+))?$`)
-	reGlobal   = regexp.MustCompile(`^projects/[^/]+/global/(firewalls|snapshots)(?:/([^/]+))?$`)
+	reSubnet   = regexp.MustCompile(`^projects/[^/]+/regions/([^/]+)/subnetworks(?:/([^/]+))?$`)
+	reGlobal   = regexp.MustCompile(`^projects/[^/]+/global/(firewalls|snapshots|networks)(?:/([^/]+))?$`)
 )
 
 func (f *fakeGCP) compute(r *http.Request, p string, body []byte) (any, error) {
@@ -164,9 +168,15 @@ func (f *fakeGCP) compute(r *http.Request, p string, body []byte) (any, error) {
 	if m := reRegional.FindStringSubmatch(p); m != nil {
 		return f.resourcePolicies(r, m[1], m[2], body)
 	}
+	if m := reSubnet.FindStringSubmatch(p); m != nil {
+		return f.subnetsAPI(r, m[1], m[2], body)
+	}
 	if m := reGlobal.FindStringSubmatch(p); m != nil {
-		if m[1] == "firewalls" {
+		switch m[1] {
+		case "firewalls":
 			return f.firewallsAPI(r, m[2], body)
+		case "networks":
+			return f.networksAPI(r, m[2], body)
 		}
 		return f.snapshotsAPI(r, m[2])
 	}
@@ -178,6 +188,39 @@ func (f *fakeGCP) compute(r *http.Request, p string, body []byte) (any, error) {
 		return f.disksAPI(r, m[1], m[3], m[4], body)
 	}
 	return f.instancesAPI(r, m[1], m[3], m[4], body)
+}
+
+func (f *fakeGCP) networksAPI(r *http.Request, name string, body []byte) (any, error) {
+	if r.Method == http.MethodPost {
+		n := decode[compute.Network](f.t, body)
+		if f.networks[n.Name] != nil {
+			return nil, errf(409, "network %s exists", n.Name)
+		}
+		f.networks[n.Name] = n
+		return done(""), nil
+	}
+	if n := f.networks[name]; n != nil {
+		return n, nil
+	}
+	return nil, errf(404, "network %s not found", name)
+}
+
+func (f *fakeGCP) subnetsAPI(r *http.Request, region, name string, body []byte) (any, error) {
+	if r.Method == http.MethodPost {
+		s := decode[compute.Subnetwork](f.t, body)
+		if f.networks[last(s.Network)] == nil {
+			return nil, errf(400, "network %s not found", s.Network)
+		}
+		if f.subnets[region+"/"+s.Name] != nil {
+			return nil, errf(409, "subnet %s exists", s.Name)
+		}
+		f.subnets[region+"/"+s.Name] = s
+		return done(""), nil
+	}
+	if s := f.subnets[region+"/"+name]; s != nil {
+		return s, nil
+	}
+	return nil, errf(404, "subnet %s not found", name)
 }
 
 func (f *fakeGCP) instancesAPI(r *http.Request, zone, name, verb string, body []byte) (any, error) {

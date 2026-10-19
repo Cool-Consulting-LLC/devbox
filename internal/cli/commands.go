@@ -28,16 +28,19 @@ func preflightCmd(g *globals) *cobra.Command {
 	var fix bool
 	cmd := &cobra.Command{
 		Use:   "preflight",
-		Short: "Read-only survey of the project; --fix enables missing APIs",
+		Short: "Read-only survey of the project; --fix enables APIs and creates the network",
 		Long: `Checks everything ` + "`up`" + ` depends on and prints one line per check, with the fix
 for each failure. Exits non-zero if anything is FAIL or MISSING.
 
---fix enables missing APIs and changes nothing else. APIs are never disabled.`,
+--fix enables missing APIs and, if they are missing, creates the network and
+subnet devbox.yaml names: a custom-mode network with no firewall rules and a
+` + box.SubnetRange + ` subnet with Private Google Access. It changes nothing else, and
+never disables an API or changes or deletes a network.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}
@@ -47,7 +50,7 @@ for each failure. Exits non-zero if anything is FAIL or MISSING.
 				return err
 			}
 			if res.PosixUser != "" {
-				fmt.Printf("\nTailscale SSH rule for this box (README.md, How to set it up, step 3):\n")
+				fmt.Printf("\nTailscale SSH rule for this box (README.md, How to set it up, step 2):\n")
 				fmt.Printf("  { \"action\": \"accept\", \"src\": [%q], \"dst\": [\"tag:devbox\"], \"users\": [%q] }\n", res.Email, res.PosixUser)
 			}
 			if !res.OK {
@@ -56,7 +59,7 @@ for each failure. Exits non-zero if anything is FAIL or MISSING.
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&fix, "fix", false, "enable missing APIs")
+	cmd.Flags().BoolVar(&fix, "fix", false, "enable missing APIs, create a missing network and subnet")
 	return cmd
 }
 
@@ -77,7 +80,7 @@ func exposureGuard(ctx context.Context, b *box.Box, allow bool) error {
 }
 
 func upCmd(g *globals) *cobra.Command {
-	var allowExposure, shareLogin bool
+	var allowExposure, shareLogin, firstLogin, reprov bool
 	cmd := &cobra.Command{
 		Use:   "up",
 		Short: "Create what is missing, resume if suspended",
@@ -90,6 +93,12 @@ change that would, up says so and leaves it for ` + "`devbox apply`." + `
 up refuses to run while the box has an external IP and a firewall rule devbox
 did not create admits the internet (see ` + "`devbox preflight`" + `), unless
 --allow-exposure.
+
+A new box: up waits for provisioning, showing its log, then logs you in once
+through IAP, which creates your account there. --first-login=false skips it.
+
+If metadata changed, up then reprovisions, as ` + "`devbox reprovision`" + ` does.
+--reprovision=false skips it.
 
 If your Google login is missing or expired, up first runs
 ` + "`gcloud auth login --update-adc`" + `, as ` + "`make auth`" + ` does, when at a terminal.
@@ -123,11 +132,19 @@ login covers both.
 				return err
 			}
 			if created {
-				fmt.Printf("\nThe box is booting. Provisioning takes a few minutes. First login, which creates your account:\n")
-				fmt.Printf("  gcloud compute ssh %s --project %s --zone %s --tunnel-through-iap\n", b.C.Name, b.C.ProjectID, b.C.Zone)
-				fmt.Printf("Watch it with:\n  gcloud compute ssh %s --project %s --zone %s --tunnel-through-iap -- tail -f /var/log/devbox-provision.log\n", b.C.Name, b.C.ProjectID, b.C.Zone)
-			} else if p.NeedsReprovision {
-				fmt.Println("\nMetadata changed: run `devbox reprovision` to apply it on the box.")
+				if !firstLogin {
+					fmt.Printf("\nThe box is booting. Provisioning takes a few minutes. First login, which creates your account:\n")
+					fmt.Printf("  gcloud compute ssh %s --project %s --zone %s --tunnel-through-iap\n", b.C.Name, b.C.ProjectID, b.C.Zone)
+					return nil
+				}
+				return firstLoginIAP(ctx, b)
+			}
+			if p.NeedsReprovision {
+				if !reprov {
+					fmt.Println("\nMetadata changed: run `devbox reprovision` to apply it on the box.")
+				} else if err := reprovision(ctx, b, &remoteFlags{}, false); err != nil {
+					return err
+				}
 			}
 			// A new box has no account for you yet, and on the box the
 			// login is the box's own already.
@@ -141,7 +158,50 @@ login covers both.
 	}
 	cmd.Flags().BoolVar(&allowExposure, "allow-exposure", false, "go ahead even if firewall rules open the box to the internet")
 	cmd.Flags().BoolVar(&shareLogin, "share-login", true, "pass your Google login to the box's gcloud configs for the same account")
+	cmd.Flags().BoolVar(&firstLogin, "first-login", true, "on a new box, wait for provisioning and log in once through IAP")
+	cmd.Flags().BoolVar(&reprov, "reprovision", true, "reprovision when metadata changed")
 	return cmd
+}
+
+// firstLoginScript waits for the first provisioning run, showing its log, then
+// enrols the caller, as the login shell's profile would: devbox-enroll is the
+// one command anyone may sudo. A command over SSH starts no login shell. Exits
+// 3 when provisioning or enrolment failed, which is not worth retrying.
+const firstLoginScript = `log=/var/log/devbox-provision.log
+tail -n +1 -F "$log" 2>/dev/null & t=$!
+while s=$(systemctl is-active devbox-provision.service); [ "$s" != active ] && [ "$s" != failed ]; do sleep 5; done
+sleep 1; kill "$t" 2>/dev/null
+[ "$s" = active ] || { echo "provisioning failed; see $log" >&2; exit 3; }
+sudo -n /usr/local/sbin/devbox-enroll </dev/null || exit 3`
+
+// firstLoginIAP logs in to a new box through IAP, which has OS Login create your
+// account, once provisioning is done. The tailnet may not have the box yet. The
+// box's sshd takes a minute or two to come up, so connection failures retry.
+func firstLoginIAP(ctx context.Context, b *box.Box) error {
+	t := remote.Target{IAP: true, Project: b.C.ProjectID, Zone: b.C.Zone, Instance: b.C.Name}
+	fmt.Printf("\nThe box is booting. Waiting for provisioning, about 3 minutes, then logging you in once through IAP to create your account ...\n")
+	deadline := time.Now().Add(15 * time.Minute)
+	for {
+		err := t.Run(ctx, firstLoginScript, nil)
+		if err == nil {
+			break
+		}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 3 || ctx.Err() != nil || time.Now().After(deadline) {
+			return fmt.Errorf("%w\nlog in yourself once provisioning works: gcloud compute ssh %s --project %s --zone %s --tunnel-through-iap", err, b.C.Name, b.C.ProjectID, b.C.Zone)
+		}
+		fmt.Println("  (the box is not answering SSH yet; retrying in 15s)")
+		select {
+		case <-ctx.Done():
+		case <-time.After(15 * time.Second):
+		}
+	}
+	host := b.C.Name
+	if u, err := b.PosixUser(ctx); err == nil {
+		host = u + "@" + host
+	}
+	fmt.Printf("\nYour account is ready. From now on, use the tailnet:\n  mosh %s -- ta main\n", host)
+	return nil
 }
 
 // adoptLogin gives the box the laptop's Google login, so the reauthentication
@@ -227,7 +287,7 @@ func statusCmd(g *globals) *cobra.Command {
 }
 
 func applyCmd(g *globals) *cobra.Command {
-	var dryRun, yes, allowExposure bool
+	var dryRun, yes, allowExposure, reprov bool
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Reconcile config to reality; prints the diff first",
@@ -240,6 +300,9 @@ func applyCmd(g *globals) *cobra.Command {
 A suspended instance is always resumed before it is changed. Replace and restart
 ask for confirmation unless --yes. --dry-run prints and stops.
 
+When reprovision-tier settings changed, apply then reprovisions, as
+` + "`devbox reprovision`" + ` does. --reprovision=false skips it.
+
 Like up, it refuses to run while the box has an external IP and a firewall rule
 devbox did not create admits the internet, unless --allow-exposure. --dry-run
 reports such rules and goes on.`,
@@ -247,7 +310,7 @@ reports such rules and goes on.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}
@@ -271,15 +334,20 @@ reports such rules and goes on.`,
 			if err := b.Execute(ctx, p.Ops); err != nil {
 				return err
 			}
-			if p.NeedsReprovision {
-				fmt.Println("\nReprovision-tier settings changed: run `devbox reprovision`.")
+			if !p.NeedsReprovision {
+				return nil
 			}
-			return nil
+			if !reprov {
+				fmt.Println("\nReprovision-tier settings changed: run `devbox reprovision`.")
+				return nil
+			}
+			return reprovision(ctx, b, &remoteFlags{}, false)
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the operations and stop")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "do not ask before replace or restart")
 	cmd.Flags().BoolVar(&allowExposure, "allow-exposure", false, "go ahead even if firewall rules open the box to the internet")
+	cmd.Flags().BoolVar(&reprov, "reprovision", true, "reprovision when reprovision-tier settings changed")
 	return cmd
 }
 
@@ -380,39 +448,49 @@ hour before the re-run; use it with --iap, since the tailnet is what is missing.
 			if err != nil {
 				return err
 			}
-			in, err := b.SyncProvisionMetadata(ctx)
-			if gcp.Code(err) == 403 {
-				return fmt.Errorf("%w\nthese Google credentials cannot update the instance's metadata. On the box without your own `gcloud auth application-default login`, they are the box's service account, which by design cannot", err)
-			}
-			if err != nil {
-				return err
-			}
-			if in == nil || in.Status != "RUNNING" {
-				return fmt.Errorf("instance %s is not running; `devbox up` first", b.C.Name)
-			}
-			if rejoin {
-				if err := b.GrantTailnetJoin(ctx); err != nil {
-					return fmt.Errorf("letting the box read %s: %w", b.C.Tailscale.OAuthSecret, err)
-				}
-				fmt.Printf("%s can read %s for the next hour\n", b.C.Name, b.C.Tailscale.OAuthSecret)
-			}
-			t, err := rf.target(ctx, b)
-			if err != nil {
-				return err
-			}
-			via := t.Host
-			if t.Local {
-				via = "this machine"
-			} else if t.IAP {
-				via = "IAP"
-			}
-			fmt.Printf("reprovisioning %s via %s ...\n", b.C.Name, via)
-			return t.Run(ctx, reprovisionScript, nil)
+			return reprovision(ctx, b, &rf, rejoin)
 		},
 	}
 	rf.add(cmd)
 	cmd.Flags().BoolVar(&rejoin, "rejoin", false, "let the box read the Tailscale OAuth secret for an hour, to join the tailnet")
 	return cmd
+}
+
+// reprovision is `devbox reprovision`: sync the metadata, then have the box
+// re-run provision.sh, showing its log.
+func reprovision(ctx context.Context, b *box.Box, rf *remoteFlags, rejoin bool) error {
+	in, err := b.SyncProvisionMetadata(ctx)
+	if gcp.Code(err) == 403 {
+		return fmt.Errorf("%w\nthese Google credentials cannot update the instance's metadata. On the box without your own `gcloud auth application-default login`, they are the box's service account, which by design cannot", err)
+	}
+	if err != nil {
+		return err
+	}
+	if in == nil || in.Status != "RUNNING" {
+		return fmt.Errorf("instance %s is not running; `devbox up` first", b.C.Name)
+	}
+	if rejoin {
+		if err := b.GrantTailnetJoin(ctx); err != nil {
+			return fmt.Errorf("letting the box read %s: %w", b.C.Tailscale.OAuthSecret, err)
+		}
+		fmt.Printf("%s can read %s for the next hour\n", b.C.Name, b.C.Tailscale.OAuthSecret)
+	}
+	t, err := rf.target(ctx, b)
+	if err != nil {
+		return err
+	}
+	via := t.Host
+	if t.Local {
+		via = "this machine"
+	} else if t.IAP {
+		via = "IAP"
+	}
+	fmt.Printf("\nreprovisioning %s via %s ...\n", b.C.Name, via)
+	// A box just resumed takes a few seconds to be back on the tailnet.
+	if err := t.WaitReachable(ctx, 90*time.Second); err != nil {
+		return err
+	}
+	return t.Run(ctx, reprovisionScript, nil)
 }
 
 func destroyCmd(g *globals) *cobra.Command {
@@ -432,7 +510,7 @@ Never touches the project, the VPC, the subnet or API enablement.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}

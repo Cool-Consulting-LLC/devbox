@@ -196,7 +196,7 @@ in, never from a parent directory.
 
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}
@@ -240,7 +240,7 @@ for a directory of repos you cloned by hand.
 			}
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}
@@ -326,7 +326,7 @@ whatever runs in it. It refuses while Claude Code runs in the project, unless
 			}
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}
@@ -438,7 +438,7 @@ sessions read settings.local.json at start, so restart those too.`,
 			}
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}
@@ -463,7 +463,7 @@ sessions read settings.local.json at start, so restart those too.`,
 
 func projectSecretCmd(g *globals) *cobra.Command {
 	var rf remoteFlags
-	var del bool
+	var del, recreate bool
 	cmd := &cobra.Command{
 		Use:   "secret <project> <KEY>",
 		Short: "Store a project secret, reference it from the env",
@@ -473,19 +473,21 @@ access to that one secret, and sets KEY=@secret:<name>-<project>-<KEY> in
 /srv/code/<project>/.devbox-env.
 
 Running it again for the same KEY rotates: a new version is added and older
-ones are disabled. Sessions read secrets when they are created, so restart the
-project's session on the box: devbox-sessions --recreate <project>.
+ones are disabled. Sessions read secrets when they are created: --recreate
+restarts the project's tmux session so it has the secret now, which kills
+whatever is running in it. Without it, run devbox-sessions --recreate <project>
+on the box when convenient.
 
 --delete removes the reference and deletes the secret.`,
 		Example: `  devbox project secret acme-api OPENAI_API_KEY
-  pbpaste | devbox project secret acme-api DATABASE_URL
+  pbpaste | devbox project secret acme-api DATABASE_URL --recreate
   devbox project secret acme-api OPENAI_API_KEY --delete`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			project, key := args[0], args[1]
 			ctx, cancel := signalCtx()
 			defer cancel()
-			b, err := g.load(ctx)
+			b, err := g.loadLoggedIn(ctx)
 			if err != nil {
 				return err
 			}
@@ -525,10 +527,14 @@ project's session on the box: devbox-sessions --recreate <project>.
 				fmt.Fprintf(os.Stderr, "the secret is stored, but the box was not updated. On the box, add to /srv/code/%s/.devbox-env:\n  %s=@secret:%s\n", project, key, id)
 				return err
 			}
+			if recreate {
+				return t.Run(ctx, remote.Join("devbox-sessions", "--recreate", project), nil)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&del, "delete", false, "remove the reference and delete the secret")
+	cmd.Flags().BoolVar(&recreate, "recreate", false, "restart the project's tmux session now so it has the secret")
 	rf.add(cmd)
 	return cmd
 }

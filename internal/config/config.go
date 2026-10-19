@@ -54,8 +54,8 @@ type Config struct {
 }
 
 type Network struct {
-	Name   string `yaml:"name" describe:"An existing VPC network in the project. Never created or deleted. Required: GCP's network called default usually allows SSH from anywhere, so prefer a dedicated one (README.md, How to set it up, step 2). preflight lists rules that would expose the box." tier:"replace"`
-	Subnet string `yaml:"subnet" describe:"An existing subnet of that network, in the zone's region. Required." tier:"replace"`
+	Name   string `yaml:"name" describe:"A VPC network in the project. preflight --fix creates it, custom-mode and with no firewall rules, if it is missing; devbox never changes or deletes it. Required: GCP's network called default usually allows SSH from anywhere, so prefer a dedicated one. preflight lists rules that would expose the box." tier:"replace"`
+	Subnet string `yaml:"subnet" describe:"A subnet of that network, in the zone's region. preflight --fix creates it, 10.10.0.0/24 with Private Google Access, if it is missing. Required." tier:"replace"`
 }
 
 type Git struct {
@@ -65,15 +65,15 @@ type Git struct {
 
 type Tailscale struct {
 	Tag         string `yaml:"tag" describe:"ACL tag the node advertises. Must be owned by the OAuth client." tier:"reprovision" default:"tag:devbox"`
-	OAuthSecret string `yaml:"oauth_secret" describe:"Secret Manager secret holding the Tailscale OAuth client secret. The box can read it only for an hour after its code disk is created, or after reprovision --rejoin." tier:"reprovision" default:"devbox-tailscale-oauth"`
+	OAuthSecret string `yaml:"oauth_secret" describe:"Secret Manager secret holding the Tailscale OAuth client secret; devbox secret tailscale stores it. The box can read it only for an hour after its code disk is created, or after reprovision --rejoin." tier:"reprovision" default:"devbox-tailscale-oauth"`
 }
 
 type SSHKey struct {
-	Secret string `yaml:"secret" describe:"Secret Manager secret holding the machine ed25519 private key, loaded into the system ssh-agent at boot. The box is granted read access on this secret only." tier:"reprovision" default:"devbox-ssh-key"`
+	Secret string `yaml:"secret" describe:"Secret Manager secret holding the machine ed25519 private key, which devbox secret ssh-key generates; loaded into the system ssh-agent at boot. The box is granted read access on this secret only." tier:"reprovision" default:"devbox-ssh-key"`
 }
 
 type Sudo struct {
-	PasswordSecret string `yaml:"password_secret" describe:"Secret Manager secret holding a crypt(5) hash, e.g. from openssl passwd -6. When set, enrolled admins may sudo anything after typing that password, every time. Agents run as you, so one could capture it when you type it. Empty leaves sudo limited to devbox-enroll and reprovisioning." tier:"reprovision" default:""`
+	PasswordSecret string `yaml:"password_secret" describe:"Secret Manager secret holding a crypt(5) hash of the sudo password; devbox secret sudo stores it. When set, enrolled admins may sudo anything after typing that password, every time. Agents run as you, so one could capture it when you type it. Empty leaves sudo limited to devbox-enroll and reprovisioning." tier:"reprovision" default:""`
 }
 
 type Snapshots struct {

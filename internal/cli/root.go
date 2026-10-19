@@ -48,7 +48,7 @@ tailnet, a pet disk at /srv/code, IAP and break-glass ways in, and alerts.
 Stateless: resources are found by the label devbox=<name> and the prefix <name>-.
 
 Credentials: Application Default Credentials (gcloud auth application-default login).
-At a terminal, up, down, status and reprovision log in again when it expired.
+At a terminal, every command logs in first when the login is missing or expired.
 Docs: README.md (what it is, how to set it up, how to use it) and docs/config.md.`,
 		Version:       Version,
 		SilenceUsage:  true,
@@ -60,7 +60,7 @@ Docs: README.md (what it is, how to set it up, how to use it) and docs/config.md
 
 	root.AddCommand(
 		preflightCmd(g), upCmd(g), downCmd(g), statusCmd(g), applyCmd(g),
-		reprovisionCmd(g), projectCmd(g), destroyCmd(g), configCmd(),
+		reprovisionCmd(g), secretCmd(g), projectCmd(g), destroyCmd(g), configCmd(),
 	)
 	return root
 }

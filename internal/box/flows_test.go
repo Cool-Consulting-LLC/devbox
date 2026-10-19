@@ -629,3 +629,51 @@ func TestStatusCost(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureNetwork(t *testing.T) {
+	e := setup(t)
+	made, err := e.b.EnsureNetwork(e.ctx)
+	if err != nil || len(made) != 2 {
+		t.Fatalf("EnsureNetwork = %v, %v", made, err)
+	}
+	n, s := e.f.networks["devbox"], e.f.subnets["europe-west4/devbox-europe-west4"]
+	if n == nil || n.AutoCreateSubnetworks || s == nil || !s.PrivateIpGoogleAccess || s.IpCidrRange != SubnetRange {
+		t.Fatalf("network %+v subnet %+v", n, s)
+	}
+	if made, err := e.b.EnsureNetwork(e.ctx); err != nil || len(made) != 0 {
+		t.Fatalf("second EnsureNetwork = %v, %v", made, err)
+	}
+}
+
+func TestEnsureNetworkKeepsAnExistingNetwork(t *testing.T) {
+	e := setup(t)
+	e.f.networks["devbox"] = &compute.Network{Name: "devbox", Description: "mine"}
+	made, err := e.b.EnsureNetwork(e.ctx)
+	if err != nil || len(made) != 1 || !strings.HasPrefix(made[0], "subnet ") || e.f.networks["devbox"].Description != "mine" {
+		t.Fatalf("EnsureNetwork = %v, %v", made, err)
+	}
+}
+
+// The machine key is readable by the box at any time; the Tailscale OAuth
+// secret only while it joins, so storing it grants nothing.
+func TestPutBoxSecret(t *testing.T) {
+	e := setup(t)
+	e.run(ModeUp)
+	ts, key := e.b.C.Tailscale.OAuthSecret, e.b.C.SSHKey.Secret
+	delete(e.f.secrets, key)
+	for _, id := range []string{ts, key} {
+		if _, err := e.b.PutBoxSecret(e.ctx, id, []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+		if e.f.secrets[id].s.Labels["devbox"] != "devbox" {
+			t.Fatalf("%s labels %v", id, e.f.secrets[id].s.Labels)
+		}
+	}
+	if !secretGranted(e.f.secrets[key].policy, e.b.C.SAMember()) {
+		t.Fatal("machine key not granted")
+	}
+	if secretGranted(e.f.secrets[ts].policy, e.b.C.SAMember()) {
+		t.Fatal("Tailscale OAuth secret granted standing read")
+	}
+	e.assertConverged()
+}

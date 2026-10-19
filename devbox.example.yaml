@@ -6,7 +6,7 @@ create_project: false            # BACKLOGGED. Refuses today.
 zone: europe-west4-a             # region is derived
 name: devbox
 
-network:                         # an existing VPC; README.md step 2 creates this one
+network:                         # devbox preflight --fix creates both if missing
   name: devbox                   # avoid GCP's "default" network: it allows SSH from anywhere
   subnet: devbox-europe-west4
 

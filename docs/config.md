@@ -10,8 +10,8 @@ What does each value in `devbox.yaml` do? One row per key. Absent keys take the 
 | `create_project` | bool | `false` | refused | Create the project, VPC and subnet. Backlogged: true is refused today. |
 | `zone` | string | `europe-west4-a` | identity | Compute zone. The region is derived from it and must match the subnet's region. |
 | `name` | string | `devbox` | identity | Box name. Every resource is named after it (NAME-code, NAME-allow-iap-ssh, ...) and labelled devbox=NAME. Also the Tailscale hostname and the service account ID. 6-30 chars, lowercase, digits, hyphens. |
-| `network.name` | string | *(required)* | replace | An existing VPC network in the project. Never created or deleted. Required: GCP's network called default usually allows SSH from anywhere, so prefer a dedicated one (README.md, How to set it up, step 2). preflight lists rules that would expose the box. |
-| `network.subnet` | string | *(required)* | replace | An existing subnet of that network, in the zone's region. Required. |
+| `network.name` | string | *(required)* | replace | A VPC network in the project. preflight --fix creates it, custom-mode and with no firewall rules, if it is missing; devbox never changes or deletes it. Required: GCP's network called default usually allows SSH from anywhere, so prefer a dedicated one. preflight lists rules that would expose the box. |
+| `network.subnet` | string | *(required)* | replace | A subnet of that network, in the zone's region. preflight --fix creates it, 10.10.0.0/24 with Private Google Access, if it is missing. Required. |
 | `machine_type` | string | `e2-standard-4` | restart | Compute machine type. Must be suspend-capable; E2 is the only family that reports guest memory without an agent. |
 | `external_ip` | bool | `true` | in-place | Give the instance an ephemeral external IP for egress. Set false only if the subnet has Cloud NAT and Private Google Access. |
 | `code_disk_gb` | integer | `50` | reprovision | Size of the /srv/code pet disk. Grow only; shrinking is refused. |
@@ -20,9 +20,9 @@ What does each value in `devbox.yaml` do? One row per key. Absent keys take the 
 | `git.name` | string | *(required)* | reprovision | user.name in the rendered /etc/gitconfig. |
 | `git.email` | string | *(required)* | reprovision | user.email in /etc/gitconfig and /etc/devbox/allowed_signers. |
 | `tailscale.tag` | string | `tag:devbox` | reprovision | ACL tag the node advertises. Must be owned by the OAuth client. |
-| `tailscale.oauth_secret` | string | `devbox-tailscale-oauth` | reprovision | Secret Manager secret holding the Tailscale OAuth client secret. The box can read it only for an hour after its code disk is created, or after reprovision --rejoin. |
-| `ssh_key.secret` | string | `devbox-ssh-key` | reprovision | Secret Manager secret holding the machine ed25519 private key, loaded into the system ssh-agent at boot. The box is granted read access on this secret only. |
-| `sudo.password_secret` | string | *(empty)* | reprovision | Secret Manager secret holding a crypt(5) hash, e.g. from openssl passwd -6. When set, enrolled admins may sudo anything after typing that password, every time. Agents run as you, so one could capture it when you type it. Empty leaves sudo limited to devbox-enroll and reprovisioning. |
+| `tailscale.oauth_secret` | string | `devbox-tailscale-oauth` | reprovision | Secret Manager secret holding the Tailscale OAuth client secret; devbox secret tailscale stores it. The box can read it only for an hour after its code disk is created, or after reprovision --rejoin. |
+| `ssh_key.secret` | string | `devbox-ssh-key` | reprovision | Secret Manager secret holding the machine ed25519 private key, which devbox secret ssh-key generates; loaded into the system ssh-agent at boot. The box is granted read access on this secret only. |
+| `sudo.password_secret` | string | *(empty)* | reprovision | Secret Manager secret holding a crypt(5) hash of the sudo password; devbox secret sudo stores it. When set, enrolled admins may sudo anything after typing that password, every time. Agents run as you, so one could capture it when you type it. Empty leaves sudo limited to devbox-enroll and reprovisioning. |
 | `snapshots.start_time` | string | `03:00` | in-place | Daily snapshot time of the code disk, UTC, on the hour (HH:00). |
 | `snapshots.retention_days` | integer | `14` | in-place | Days each snapshot is kept. Snapshots outlive the disk. |
 | `alerts.email` | string | *(empty)* | in-place | Address of the email notification channel. Empty disables all alerting resources. |

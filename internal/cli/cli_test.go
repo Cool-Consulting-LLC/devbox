@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func TestDirFor(t *testing.T) {
@@ -98,5 +101,29 @@ func TestRenameSecrets(t *testing.T) {
 	}
 	if got, _ := RenameSecrets("devbox", "p", "q", ""); len(got) != 0 {
 		t.Errorf("empty: %+v", got)
+	}
+}
+
+func TestNewMachineKey(t *testing.T) {
+	priv, pub, err := newMachineKey("devbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.ParsePrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub.Type() != "ssh-ed25519" || !bytes.Equal(signer.PublicKey().Marshal(), pub.Marshal()) {
+		t.Fatalf("public key %s does not match the private key", pub.Type())
+	}
+}
+
+func TestMissingScopes(t *testing.T) {
+	out := []byte("HTTP/2.0 200 OK\r\nX-Oauth-Scopes: gist, admin:public_key, repo\r\n\r\n{\"x-oauth-scopes\": \"\"}")
+	if got := MissingScopes(out); len(got) != 1 || got[0] != "admin:ssh_signing_key" {
+		t.Errorf("MissingScopes = %v", got)
+	}
+	if got := MissingScopes([]byte("HTTP/2.0 200 OK\r\n\r\n{}")); got != nil {
+		t.Errorf("no scopes header: MissingScopes = %v", got)
 	}
 }
