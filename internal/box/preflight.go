@@ -337,13 +337,17 @@ var ErrExposed = errors.New("the box would be reachable from the internet")
 
 // CheckExposure is preflight's exposure check on its own, for up and apply: an
 // error if the box has, or will get, an external IP and a firewall rule devbox
-// did not create admits the internet. A rule list it cannot read is an error
-// too, since then nothing says the box is safe.
+// did not create admits the internet. A rule list the API refuses is an error
+// too, since then nothing says the box is safe. A request that never reached
+// the API (no network, DNS) is a plain error: --allow-exposure would not help.
 func (b *Box) CheckExposure(ctx context.Context) error {
 	if !b.C.WantExternalIP() {
 		return nil
 	}
 	internet, _, err := b.exposure(ctx)
+	if err != nil && gcp.Code(err) == 0 {
+		return fmt.Errorf("cannot reach the Compute API to list firewall rules: %w", err)
+	}
 	if err != nil {
 		return fmt.Errorf("%w? cannot list firewall rules to tell: %s", ErrExposed, short(err))
 	}

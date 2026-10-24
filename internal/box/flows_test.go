@@ -565,6 +565,12 @@ func TestCheckExposure(t *testing.T) {
 	if err := e.b.CheckExposure(e.ctx); err != nil {
 		t.Fatalf("no external IP: %v", err)
 	}
+	// An API that cannot be reached says so, not that the box may be exposed.
+	*e.b.C.ExternalIP = true
+	e.f.srv.Close()
+	if err := e.b.CheckExposure(e.ctx); err == nil || errors.Is(err, ErrExposed) {
+		t.Fatalf("unreachable API: %v", err)
+	}
 }
 
 func TestPutSecretGrantsTheBox(t *testing.T) {

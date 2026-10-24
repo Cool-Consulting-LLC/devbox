@@ -105,7 +105,11 @@ If your Google login is missing or expired, up first runs
 From the laptop, up then passes your Google login to the box: every gcloud
 config there logged in as the same account gets it, CLI login and ADC, so one
 login covers both.
---share-login=false skips it.`,
+--share-login=false skips it.
+
+From the laptop, up ends by checking that the box is online on your tailnet,
+where ssh and mosh will look for it, and says what to do when it is not. A box
+that is up but off the tailnet is still a warning, not a failure.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signalCtx()
@@ -137,8 +141,18 @@ login covers both.
 					fmt.Printf("  gcloud compute ssh %s --project %s --zone %s --tunnel-through-iap\n", b.C.Name, b.C.ProjectID, b.C.Zone)
 					return nil
 				}
-				return firstLoginIAP(ctx, b)
+				if err := firstLoginIAP(ctx, b); err != nil {
+					return err
+				}
+				// Provisioning joined the tailnet; this is the first time
+				// the laptop looks for the box there.
+				tailnetCheck(ctx, b.C.Name)
+				moshHint(ctx, b)
+				return nil
 			}
+			// A resumed box takes a few seconds to be back on the tailnet,
+			// where reprovision and adoptLogin reach it.
+			tailnetCheck(ctx, b.C.Name)
 			if p.NeedsReprovision {
 				if !reprov {
 					fmt.Println("\nMetadata changed: run `devbox reprovision` to apply it on the box.")
@@ -146,9 +160,8 @@ login covers both.
 					return err
 				}
 			}
-			// A new box has no account for you yet, and on the box the
-			// login is the box's own already.
-			if shareLogin && !created && !onBox(b.C.Name) {
+			// On the box the login is the box's own already.
+			if shareLogin && !onBox(b.C.Name) {
 				if err := adoptLogin(ctx, b); err != nil {
 					fmt.Fprintf(os.Stderr, "could not pass your login to the box: %v\n", err)
 				}
@@ -196,12 +209,61 @@ func firstLoginIAP(ctx context.Context, b *box.Box) error {
 		case <-time.After(15 * time.Second):
 		}
 	}
+	fmt.Printf("\nYour account is ready.\n")
+	return nil
+}
+
+// moshHint prints how to log in over the tailnet from now on.
+func moshHint(ctx context.Context, b *box.Box) {
 	host := b.C.Name
 	if u, err := b.PosixUser(ctx); err == nil {
 		host = u + "@" + host
 	}
-	fmt.Printf("\nYour account is ready. From now on, use the tailnet:\n  mosh %s -- ta main\n", host)
-	return nil
+	fmt.Printf("\nFrom now on, use the tailnet:\n  mosh %s -- ta main\n", host)
+}
+
+// tailnetCheck waits for the box to be online on this machine's tailnet, where
+// ssh and mosh will look for it, and names the problem when it is not: the
+// laptop's tailscale is down, the box never joined, or it has not come back
+// yet. It only warns: the box is up either way, and IAP still reaches it. On
+// the box itself there is nothing to check.
+func tailnetCheck(ctx context.Context, name string) {
+	if onBox(name) {
+		return
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	waited := false
+	for {
+		ip, err := remote.TailnetPeer(ctx, name)
+		if err == nil {
+			fmt.Printf("\n%s is online on your tailnet", name)
+			if ip != "" {
+				fmt.Printf(" (%s)", ip)
+			}
+			fmt.Println()
+			return
+		}
+		if !errors.Is(err, remote.ErrTailnetTransient) || ctx.Err() != nil || time.Now().After(deadline) {
+			if waited {
+				fmt.Println()
+			}
+			fmt.Fprintf(os.Stderr, "\nwarning: %v\n", err)
+			if errors.Is(err, remote.ErrTailnetTransient) {
+				fmt.Fprintf(os.Stderr, "  ssh and mosh by name will not work. Check the machine in the Tailscale admin console; to rejoin: devbox reprovision --iap --rejoin\n")
+			}
+			return
+		}
+		if !waited {
+			fmt.Printf("\nwaiting for %s on your tailnet ...", name)
+			waited = true
+		} else {
+			fmt.Print(".")
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(3 * time.Second):
+		}
+	}
 }
 
 // adoptLogin gives the box the laptop's Google login, so the reauthentication

@@ -2,6 +2,7 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -31,5 +32,25 @@ func TestLocalRunFeedsStdin(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(f); string(b) != "hello" {
 		t.Fatalf("got %q", b)
+	}
+}
+
+func TestParseTailnetPeer(t *testing.T) {
+	const status = `{"BackendState":"Running","Self":{"DNSName":"laptop.tail1.ts.net.","Online":true},
+	"Peer":{"nodekey:a":{"HostName":"devbox","DNSName":"devbox.tail1.ts.net.","Online":true,"TailscaleIPs":["fd7a::1","100.1.2.3"]},
+	        "nodekey:b":{"HostName":"other","DNSName":"other.tail1.ts.net.","Online":false,"TailscaleIPs":["100.4.5.6"]}}}`
+	ip, err := parseTailnetPeer([]byte(status), "devbox")
+	if err != nil || ip != "100.1.2.3" {
+		t.Fatalf("got %q, %v", ip, err)
+	}
+	if _, err := parseTailnetPeer([]byte(status), "Other"); !errors.Is(err, ErrTailnetTransient) || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("offline peer: %v", err)
+	}
+	if _, err := parseTailnetPeer([]byte(status), "nope"); !errors.Is(err, ErrTailnetTransient) || !strings.Contains(err.Error(), "not in your tailnet") {
+		t.Fatalf("missing peer: %v", err)
+	}
+	stopped := `{"BackendState":"NeedsLogin","Peer":null}`
+	if _, err := parseTailnetPeer([]byte(stopped), "devbox"); err == nil || errors.Is(err, ErrTailnetTransient) || !strings.Contains(err.Error(), "NeedsLogin") {
+		t.Fatalf("local backend down: %v", err)
 	}
 }

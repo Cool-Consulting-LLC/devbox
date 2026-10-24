@@ -76,7 +76,7 @@ The key is made in memory and goes only to Secret Manager; no key file is writte
 
 `--fix` gives the box a network of its own, `devbox` with subnet `devbox-europe-west4` (10.10.0.0/24), if they don't exist. GCP's `default` network opens SSH to the internet, and devbox refuses to use it.
 
-Provisioning takes about 3 minutes, and `up` shows its log. It then logs you in once through IAP, which creates your account on the box. From then on, use Tailscale. Run `claude` on the box and log in.
+Provisioning takes about 3 minutes, and `up` shows its log. It then logs you in once through IAP, which creates your account on the box, and checks that the box is online on your tailnet. From then on, use Tailscale. Run `claude` on the box and log in.
 
 ## How to use it
 
@@ -87,7 +87,7 @@ mosh you@devbox -- ta main                    # or: ssh you@devbox
 ./devbox status                               # what exists, its state, what it costs
 ```
 
-If `ssh` hangs, the box has suspended itself: run `./devbox up`.
+If `ssh` hangs, the box has suspended itself: run `./devbox up`. It ends by checking that the box is back on your tailnet, and says what is wrong when it is not.
 
 When your Google login expires, every `./devbox` command logs you in again first, as `make auth` does. `./devbox up` then passes the fresh login to every gcloud config on the box that is logged in as the same account, so you don't log in there again. Configs for other accounts still need `devbox-gcloud-login` on the box. The box needs `devbox-gcloud-adopt`, so run `./devbox reprovision` once after updating.
 
