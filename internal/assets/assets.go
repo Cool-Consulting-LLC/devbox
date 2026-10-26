@@ -41,6 +41,7 @@ var boxFiles = []boxFile{
 	{"box/devbox-gcloud-adopt", "/usr/local/bin/devbox-gcloud-adopt", "0755"},
 	{"box/devbox-tmux-colour", "/usr/local/bin/devbox-tmux-colour", "0755"},
 	{"box/devbox-claude-statusline", "/usr/local/bin/devbox-claude-statusline", "0755"},
+	{"box/devbox-claude-resume", "/usr/local/bin/devbox-claude-resume", "0755"},
 	{"box/devbox-agent-relay", "/usr/local/sbin/devbox-agent-relay", "0755"},
 	{"box/devbox-agent-load-key", "/usr/local/sbin/devbox-agent-load-key", "0755"},
 	{"box/devbox-ssh-agent.conf", "/etc/systemd/system/devbox-ssh-agent.service.d/devbox-load-key.conf", "0644"},
@@ -122,6 +123,7 @@ func ConfigEnv(c *config.Config) string {
 		"DEVBOX_IDLE_ENABLED":   fmt.Sprint(c.IdleEnabled()),
 		"DEVBOX_IDLE_MINUTES":   fmt.Sprint(c.Idle.AfterMinutes),
 		"DEVBOX_EXTRA_PACKAGES": strings.Join(c.ExtraPackages, " "),
+		"DEVBOX_TIMEZONE":       c.Timezone,
 	}
 	keys := make([]string, 0, len(vars))
 	for k := range vars {

@@ -1,0 +1,42 @@
+#!/bin/bash
+# Resumes a Claude Code session after its 5-hour usage limit resets.
+# claude-activity.sh runs this on StopFailure, with the hook's JSON on stdin.
+# When the turn ended on a usage limit whose reset is known and the session
+# runs in tmux, it prints when it will resume, in seconds since the epoch, and
+# leaves a waiter that types "continue" into the session's pane then.
+# Otherwise it prints nothing and exits 1.
+#
+# The reset time comes from devbox-claude-statusline, which records the
+# limits Claude Code hands it in ~/.cache/devbox/claude-limits.
+#
+#   devbox-claude-resume wait SID PANE RESUME_AT   the waiter; started by the above
+set -u
+
+if [ "${1:-}" = wait ]; then
+  sid=$2 pane=$3 resume_at=$4
+  # Wall clock, not one long sleep: a suspended box does not count down sleeps.
+  while [ "$(date +%s)" -lt "$resume_at" ]; do sleep 30; done
+  # Only if nothing has happened since: a prompt marks the session working, and
+  # a later limit gives it a different RESUME_AT.
+  read -r state _ u < <(timeout 2 head -c 64 -- "/run/devbox-claude/$sid" 2>/dev/null)
+  [ "${state:-}" = resuming ] && [ "${u:-}" = "$resume_at" ] || exit 0
+  [ "$(tmux display-message -p -t "$pane" '#{pane_current_command}' 2>/dev/null)" = claude ] || exit 0
+  tmux send-keys -t "$pane" -l continue && tmux send-keys -t "$pane" Enter
+  exit 0
+fi
+
+in=$(cat)
+[ "$(jq -r '.error // ""' <<<"$in")" = rate_limit ] || exit 1
+sid=$(jq -r '.session_id // ""' <<<"$in")
+[[ $sid =~ ^[A-Za-z0-9-]+$ ]] && [ -n "${TMUX_PANE:-}" ] || exit 1
+read -r five_reset week_pct < "$HOME/.cache/devbox/claude-limits" 2>/dev/null || exit 1
+[[ $five_reset =~ ^[0-9]+$ ]] || exit 1
+# Out of the weekly limit: the 5-hour reset would not lift it.
+[[ ${week_pct:-} =~ ^[0-9]+ ]] && [ "${BASH_REMATCH[0]}" -ge 100 ] && exit 1
+now=$(date +%s)
+# A minute after the reset, for clock skew. A reset already past means the
+# recorded limits are stale.
+resume_at=$(( five_reset + 60 ))
+[ "$resume_at" -gt "$now" ] && [ $(( resume_at - now )) -le $(( 5 * 3600 + 60 )) ] || exit 1
+setsid -f "$0" wait "$sid" "$TMUX_PANE" "$resume_at" </dev/null >/dev/null 2>&1
+echo "$resume_at"

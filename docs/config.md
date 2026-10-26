@@ -16,6 +16,7 @@ What does each value in `devbox.yaml` do? One row per key. Absent keys take the 
 | `external_ip` | bool | `true` | in-place | Give the instance an ephemeral external IP for egress. Set false only if the subnet has Cloud NAT and Private Google Access. |
 | `code_disk_gb` | integer | `50` | reprovision | Size of the /srv/code pet disk. Grow only; shrinking is refused. |
 | `boot_disk_gb` | integer | `30` | reprovision | Size of the boot disk. Grow only; shrinking is refused. |
+| `timezone` | string | `UTC` | reprovision | System timezone, an IANA name such as Europe/Amsterdam. Sets the clock in the shell, tmux and Claude Code; snapshots.start_time stays in UTC. |
 | `extra_packages` | list of string | `[]` | reprovision | Extra apt packages, usually language runtimes, installed by provision.sh. |
 | `git.name` | string | *(required)* | reprovision | user.name in the rendered /etc/gitconfig. |
 | `git.email` | string | *(required)* | reprovision | user.email in /etc/gitconfig and /etc/devbox/allowed_signers. |

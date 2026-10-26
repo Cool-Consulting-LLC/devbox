@@ -27,13 +27,14 @@ input=$(cat)
 
 # One jq call for every field. Missing fields come back empty. The separator
 # is the ASCII unit separator: a whitespace IFS would collapse empty fields.
-IFS=$'\x1f' read -r model cwd project_dir ctx_used five week cost dur_ms added removed <<<"$(
+IFS=$'\x1f' read -r model cwd project_dir ctx_used five five_reset week cost dur_ms added removed <<<"$(
   jq -r '[
     (.model.display_name // ""),
     (.workspace.current_dir // .cwd // ""),
     (.workspace.project_dir // ""),
     (.context_window.used_percentage // ""),
     (.rate_limits.five_hour.used_percentage // ""),
+    (.rate_limits.five_hour.resets_at // ""),
     (.rate_limits.seven_day.used_percentage // ""),
     (.cost.total_cost_usd // ""),
     (.cost.total_duration_ms // ""),
@@ -41,6 +42,13 @@ IFS=$'\x1f' read -r model cwd project_dir ctx_used five week cost dur_ms added r
     (.cost.total_lines_removed // "")
   ] | map(tostring) | join("\u001f")' <<<"$input"
 )"
+
+# When the 5-hour window resets and how full the week is, for
+# devbox-claude-resume. Hooks are not told either.
+if [[ $five_reset =~ ^[0-9]+$ ]] && mkdir -p "$HOME/.cache/devbox" 2>/dev/null; then
+  echo "$five_reset $week" > "$HOME/.cache/devbox/claude-limits.$$" \
+    && mv -f "$HOME/.cache/devbox/claude-limits.$$" "$HOME/.cache/devbox/claude-limits"
+fi
 
 RESET=$'\033[0m'
 DIM=$'\033[2m'

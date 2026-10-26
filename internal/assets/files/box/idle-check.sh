@@ -26,20 +26,30 @@ done
 
 # Claude Code sessions mid-turn, from the claude-activity.sh hook. A working
 # file only counts while its claude process lives, and for at most MAX_TURN
-# minutes since the last hook, in case a turn ends without a Stop.
+# minutes since the last hook, in case a turn ends without a Stop. A session
+# resuming after its usage limit (devbox-claude-resume) counts until the
+# limit resets, which is at most five hours after the turn stopped.
 MAX_TURN=180
+MAX_RESUME=310
 claude_working=0
 claude_waiting=0
+claude_resuming=0
 for f in /run/devbox-claude/*; do
   [ -f "$f" ] && [ ! -L "$f" ] || continue
   # Users own these files and can swap one for a FIFO after the test above;
   # a plain read would then block this check, and with it suspend, forever.
-  read -r state pid < <(timeout 2 head -c 64 -- "$f" 2>/dev/null)
+  read -r state pid resume_at < <(timeout 2 head -c 64 -- "$f" 2>/dev/null)
   if [[ ! $pid =~ ^[0-9]+$ ]] || [ "$(cat /proc/"$pid"/comm 2>/dev/null)" != claude ]; then
     rm -f "$f"
     continue
   fi
-  [ $(( now - $(stat -c %Y "$f") )) -lt $(( MAX_TURN * 60 )) ] || continue
+  mtime=$(stat -c %Y "$f")
+  if [ "$state" = resuming ]; then
+    [[ $resume_at =~ ^[0-9]+$ ]] && [ "$now" -lt "$resume_at" ] && [ $(( resume_at - mtime )) -lt $(( MAX_RESUME * 60 )) ] \
+      && claude_resuming=$(( claude_resuming + 1 ))
+    continue
+  fi
+  [ $(( now - mtime )) -lt $(( MAX_TURN * 60 )) ] || continue
   case "$state" in
     working) claude_working=$(( claude_working + 1 )) ;;
     waiting) claude_waiting=$(( claude_waiting + 1 )) ;;
@@ -51,10 +61,10 @@ done
 ssh_notty=$(pgrep -fc '^sshd(-session)?: [^ ]+@notty' || true)
 ts_notty=$(pgrep -fc '^/usr/sbin/tailscaled be-child ssh .*--has-tty=false' || true)
 
-busy=$(( claude_working + ssh_notty + ts_notty ))
+busy=$(( claude_working + claude_resuming + ssh_notty + ts_notty ))
 input_min=$(( ( now - last_input ) / 60 ))
 # What the last check saw, for the next "why did (or didn't) it suspend?".
-echo "$(date -Is) input=${input_min}m claude_working=$claude_working claude_waiting=$claude_waiting ssh_notty=$ssh_notty ts_notty=$ts_notty busy=$busy" > /run/devbox-idle.status
+echo "$(date -Is) input=${input_min}m claude_working=$claude_working claude_waiting=$claude_waiting claude_resuming=$claude_resuming ssh_notty=$ssh_notty ts_notty=$ts_notty busy=$busy" > /run/devbox-idle.status
 if [ "$busy" -gt 0 ]; then
   echo "$now" > /run/devbox-last-active
   exit 0

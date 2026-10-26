@@ -41,6 +41,7 @@ type Config struct {
 	CodeDiskGB  int64  `yaml:"code_disk_gb" describe:"Size of the /srv/code pet disk. Grow only; shrinking is refused." tier:"reprovision" default:"50"`
 	BootDiskGB  int64  `yaml:"boot_disk_gb" describe:"Size of the boot disk. Grow only; shrinking is refused." tier:"reprovision" default:"30"`
 
+	Timezone      string   `yaml:"timezone" describe:"System timezone, an IANA name such as Europe/Amsterdam. Sets the clock in the shell, tmux and Claude Code; snapshots.start_time stays in UTC." tier:"reprovision" default:"UTC"`
 	ExtraPackages []string `yaml:"extra_packages" describe:"Extra apt packages, usually language runtimes, installed by provision.sh." tier:"reprovision" default:"[]"`
 
 	Git       Git         `yaml:"git"`
@@ -110,6 +111,7 @@ func Defaults() *Config {
 		ExternalIP:  boolPtr(true),
 		CodeDiskGB:  50,
 		BootDiskGB:  30,
+		Timezone:    "UTC",
 		Tailscale:   Tailscale{Tag: "tag:devbox", OAuthSecret: "devbox-tailscale-oauth"},
 		SSHKey:      SSHKey{Secret: "devbox-ssh-key"},
 		Snapshots:   Snapshots{StartTime: "03:00", RetentionDays: 14},
@@ -156,6 +158,7 @@ var (
 	hourRe     = regexp.MustCompile(`^([01][0-9]|2[0-3]):00$`)
 	tagRe      = regexp.MustCompile(`^tag:[a-z0-9-]+$`)
 	secretIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,255}$`)
+	tzRe       = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$`)
 	pkgRe      = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]+(=[A-Za-z0-9.+~:-]+)?$`)
 	// RFC 1035, as GCP requires for networks, subnets and machine types. They
 	// go into API paths, so nothing else gets that far.
@@ -205,6 +208,9 @@ func (c *Config) Validate() error {
 	}
 	if c.BootDiskGB < 10 {
 		bad("boot_disk_gb must be at least 10")
+	}
+	if !tzRe.MatchString(c.Timezone) {
+		bad("timezone %q is not an IANA timezone name, e.g. Europe/Amsterdam", c.Timezone)
 	}
 	for _, p := range c.ExtraPackages {
 		if !pkgRe.MatchString(p) {

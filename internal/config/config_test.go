@@ -70,6 +70,7 @@ func TestRejects(t *testing.T) {
 		"idle vs high":    minimal + "alerts: {cpu_idle_pct: 90, cpu_high_pct: 80}",
 		"bad zone":        minimal + "zone: frankfurt",
 		"bad package":     minimal + "extra_packages: ['rm -rf /']",
+		"bad timezone":    minimal + "timezone: ../../etc/passwd",
 		"bad sudo secret": minimal + "sudo: {password_secret: 'a/b'}",
 	}
 	for name, y := range cases {
@@ -87,6 +88,7 @@ func TestAccepts(t *testing.T) {
 		minimal + "break_glass: {enabled: true, source_cidr: '2001:db8::/64', allow_mosh: true}",
 		minimal + "break_glass: {enabled: false, source_cidr: 0.0.0.0/0}", // ignored when disabled
 		minimal + "external_ip: false\nidle_suspend: {enabled: false}",
+		minimal + "timezone: America/Argentina/Buenos_Aires",
 		minimal + "extra_packages: [nodejs, python3-venv, golang-1.22]",
 		minimal + "tailscale: {oauth_secret: ts-oauth}", // any secret ID: access is granted per secret
 		minimal + "sudo: {password_secret: devbox-sudo-password-hash}",

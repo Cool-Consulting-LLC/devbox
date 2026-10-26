@@ -394,6 +394,14 @@ fi
 # Tailscale allows one; on a one-person box, the first admin enrolled is it.
 if [ -n "${operator:-}" ]; then tailscale set --operator="$operator"; fi
 
+step timezone
+# Validated as a name by the binary; whether the zone exists is only known here.
+if [ -f "/usr/share/zoneinfo/$DEVBOX_TIMEZONE" ]; then
+  timedatectl set-timezone "$DEVBOX_TIMEZONE"
+else
+  echo "timezone $DEVBOX_TIMEZONE is not in /usr/share/zoneinfo; leaving $(timedatectl show -p Timezone --value)" >&2
+fi
+
 step motd
 # Quiet logins: no Ubuntu banner, legal notice, news or update nags. The
 # .bashrc prints what is worth knowing (uptime, tmux sessions).

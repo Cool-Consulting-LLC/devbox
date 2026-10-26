@@ -1,5 +1,9 @@
 {
   "autoUpdatesChannel": "stable",
+  "env": {
+    "DISABLE_AUTOUPDATER": "1",
+    "FORCE_AUTOUPDATE_PLUGINS": "1"
+  },
   "permissions": {
     "deny": [
       "Bash(git commit *)",
@@ -31,6 +35,7 @@
     "PostToolUse": [ { "matcher": "*", "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] } ],
     "Notification": [ { "matcher": "permission_prompt", "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] } ],
     "Stop": [ { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] } ],
+    "StopFailure": [ { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] } ],
     "SessionEnd": [ { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-activity.sh" } ] } ]
   }
 }
