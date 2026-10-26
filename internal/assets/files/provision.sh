@@ -229,13 +229,21 @@ apt_repo hashicorp https://apt.releases.hashicorp.com/gpg \
 apt_repo docker https://download.docker.com/linux/ubuntu/gpg /etc/apt/keyrings/docker.asc \
   "https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
   9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+# Ubuntu's nodejs is 18 on noble; NodeSource's 22.x line replaces it. Its
+# nodejs bundles npm and conflicts with Ubuntu's npm package. The pin keeps
+# apt on NodeSource even if Ubuntu ever ships a higher version string.
+apt_repo nodesource https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+  /etc/apt/keyrings/nodesource.asc \
+  "https://deb.nodesource.com/node_22.x nodistro main" \
+  6F71F525282841EEDAF851B42F59B5F99B1BE0B4
+printf 'Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n' > /etc/apt/preferences.d/nodesource
 
 # Refresh at most daily otherwise, so a reprovision stays quick.
 if [ "$need_update" = 1 ] || [ -z "$(find /var/lib/apt/lists -maxdepth 0 -mmin -1440 2>/dev/null)" ]; then
   apt_get update -q
 fi
 # shellcheck disable=SC2086
-apt_get install -y -q acl claude-code gh golang-go nodejs npm python3-pytest ruby-bundler ruby-dev tailscale terraform \
+apt_get install -y -q acl claude-code gh golang-go nodejs python3-pytest ruby-bundler ruby-dev tailscale terraform \
   docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin uidmap slirp4netns \
   $DEVBOX_EXTRA_PACKAGES
 
