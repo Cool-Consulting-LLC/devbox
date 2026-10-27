@@ -4,6 +4,7 @@ package assets
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -55,6 +56,10 @@ var boxFiles = []boxFile{
 	{"box/docker-prune.service", "/etc/systemd/user/docker-prune.service", "0644"},
 	{"box/docker-prune.timer", "/etc/systemd/user/docker-prune.timer", "0644"},
 	{"box/rootlesskit.apparmor", "/etc/apparmor.d/usr.bin.rootlesskit", "0644"},
+	{"box/mermaid/package.json", "/opt/mermaid-cli/package.json", "0644"},
+	{"box/mermaid/package-lock.json", "/opt/mermaid-cli/package-lock.json", "0644"},
+	{"box/mermaid.apparmor", "/etc/apparmor.d/opt.mermaid-cli.chrome-headless-shell", "0644"},
+	{"box/mmdc", "/usr/local/bin/mmdc", "0755"},
 	{"box/skel/.bashrc", "/etc/skel/.bashrc", "0644"},
 	{"box/skel/.gitconfig", "/etc/skel/.gitconfig", "0644"},
 	{"box/skel/.vimrc", "/etc/skel/.vimrc", "0644"},
@@ -68,6 +73,14 @@ func Provision() string {
 	b.WriteString("write_files() {\n")
 	for i, f := range boxFiles {
 		body := read(f.src)
+		if strings.HasSuffix(f.src, "package-lock.json") {
+			// Half the size without the indentation; metadata values are capped.
+			var c bytes.Buffer
+			if err := json.Compact(&c, []byte(body)); err != nil {
+				panic(f.src + ": " + err.Error())
+			}
+			body = c.String()
+		}
 		if !strings.HasSuffix(body, "\n") {
 			body += "\n"
 		}

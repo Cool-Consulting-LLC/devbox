@@ -1,0 +1,7 @@
+#!/bin/bash
+# /usr/local/bin/mmdc, written by provision.sh: the Mermaid CLI that
+# provision.sh installs under /opt/mermaid-cli, with the Chromium it renders in.
+# The cache directory is set here so puppeteer finds that Chromium rather than
+# looking in ~/.cache.
+export PUPPETEER_CACHE_DIR=/opt/mermaid-cli/browsers
+exec node /opt/mermaid-cli/node_modules/@mermaid-js/mermaid-cli/src/cli.js "$@"

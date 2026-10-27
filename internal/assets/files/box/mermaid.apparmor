@@ -1,0 +1,11 @@
+# /etc/apparmor.d/opt.mermaid-cli.chrome-headless-shell, written by provision.sh.
+# Chromium sandboxes its renderers in user namespaces, which Ubuntu denies
+# unless a profile allows them. With this, mmdc runs sandboxed, not --no-sandbox.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile mermaid-chrome-headless-shell /opt/mermaid-cli/browsers/chrome-headless-shell/*/chrome-headless-shell-linux*/chrome-headless-shell flags=(unconfined) {
+  userns,
+
+  include if exists <local/opt.mermaid-cli.chrome-headless-shell>
+}

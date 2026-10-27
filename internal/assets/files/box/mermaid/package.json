@@ -1,0 +1,9 @@
+{
+  "name": "devbox-mermaid-cli",
+  "private": true,
+  "description": "mmdc for /usr/local/bin. Bump a version, then run `make mermaid-lock`.",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "12.0.0",
+    "puppeteer": "25.16.0"
+  }
+}

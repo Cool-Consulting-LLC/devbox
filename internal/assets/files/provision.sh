@@ -244,6 +244,7 @@ if [ "$need_update" = 1 ] || [ -z "$(find /var/lib/apt/lists -maxdepth 0 -mmin -
 fi
 # shellcheck disable=SC2086
 apt_get install -y -q acl claude-code gh golang-go nodejs python3-pytest ruby-bundler ruby-dev tailscale terraform \
+  libnspr4 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libxdamage1 libasound2t64 fonts-liberation \
   docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin uidmap slirp4netns \
   $DEVBOX_EXTRA_PACKAGES
 
@@ -277,6 +278,24 @@ release_bin ruff 0.17.0 \
   c94fc1dc71f054d06d9f1149442dcb471516aa2b7d4b7e8124e05d082d4c91d3 \
   294e181ba6ccb0c2ffd778580e3c42b19f038bdbcb844f39fd9a6a26e8148804 \
   ruff
+
+step mermaid
+# mmdc renders in puppeteer's chrome-headless-shell; the libraries it needs
+# beyond the base image are in the apt list above. npm ci installs exactly the
+# lockfile, by hash. --ignore-scripts keeps 200 packages' install hooks from
+# running as root; puppeteer's only fetches the browser, done here instead. A
+# changed lockfile reinstalls both, so an old Chromium does not linger.
+mm=/opt/mermaid-cli
+if ! cmp -s "$mm/package-lock.json" "$mm/node_modules/.devbox-lock"; then
+  rm -rf "$mm/node_modules" "$mm/browsers"
+  if (cd "$mm" && npm ci --ignore-scripts --omit=dev --no-audit --no-fund -q &&
+      PUPPETEER_CACHE_DIR="$mm/browsers" node_modules/.bin/puppeteer browsers install chrome-headless-shell >/dev/null); then
+    cp "$mm/package-lock.json" "$mm/node_modules/.devbox-lock"
+  else
+    echo "WARNING: could not install the Mermaid CLI; mmdc will not work" >&2
+  fi
+fi
+apparmor_parser -r /etc/apparmor.d/opt.mermaid-cli.chrome-headless-shell
 
 step docker
 # Rootless only: see docker-rootless.service. The packages start a root daemon;

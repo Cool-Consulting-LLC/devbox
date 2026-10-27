@@ -16,7 +16,7 @@ PREFIX ?= $(HOME)/.local
 # checked separately. assets_test.go fails if a box file is in neither list.
 BOX := $(GITROOT)/internal/assets/files/box
 SCRIPTS := $(sort $(wildcard $(GITROOT)/internal/assets/files/*.sh) \
-             $(addprefix $(BOX)/,claude-activity.sh devbox-agent-load-key devbox-claude-resume devbox-claude-statusline devbox-enroll devbox-gcloud-adopt devbox-gcloud-login devbox-project devbox-secret devbox-sessions devbox-tmux-colour guard.sh idle-check.sh mosh-server profile.sh skel/.bashrc))
+             $(addprefix $(BOX)/,claude-activity.sh devbox-agent-load-key devbox-claude-resume devbox-claude-statusline devbox-enroll devbox-gcloud-adopt devbox-gcloud-login devbox-project devbox-secret devbox-sessions devbox-tmux-colour guard.sh idle-check.sh mmdc mosh-server profile.sh skel/.bashrc))
 PYTHON := $(BOX)/devbox-agent-relay
 
 # Where the originals of the ported dotfiles live: your laptop's home.
@@ -34,7 +34,7 @@ help: ## Show this help
 
 ##@ Develop
 
-.PHONY: setup test lint fmt docs docs-check check diff-dotfiles
+.PHONY: setup test lint fmt docs docs-check check diff-dotfiles mermaid-lock
 setup: ## Everything a fresh clone needs: modules, the binary, a devbox.yaml to edit
 	go mod download
 	@$(MAKE) --no-print-directory build
@@ -68,6 +68,11 @@ docs-check: ## Fail if docs/config.md is stale
 		&& echo "docs/config.md is current"
 
 check: lint test docs-check ## Lint + test + docs
+
+# The box installs mmdc with npm ci from this lockfile, so every dependency is
+# pinned by hash, not just the two named in package.json.
+mermaid-lock: ## Regenerate the box's Mermaid CLI lockfile after a version bump
+	cd $(BOX)/mermaid && npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
 # The box's .bashrc is a cleaned copy of the laptop's. Keep the drift visible.
 diff-dotfiles: ## Diff the box's dotfiles against the originals in $(DOTFILES)
