@@ -243,7 +243,7 @@ if [ "$need_update" = 1 ] || [ -z "$(find /var/lib/apt/lists -maxdepth 0 -mmin -
   apt_get update -q
 fi
 # shellcheck disable=SC2086
-apt_get install -y -q acl claude-code gh golang-go nodejs python3-pytest ruby-bundler ruby-dev tailscale terraform \
+apt_get install -y -q acl claude-code gh golang-go nodejs python3-pytest ruby-bundler ruby-dev libssl-dev tailscale terraform \
   libnspr4 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libxdamage1 libasound2t64 fonts-liberation \
   docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin uidmap slirp4netns \
   $DEVBOX_EXTRA_PACKAGES
