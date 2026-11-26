@@ -101,6 +101,9 @@ release: ## Build dist/devbox-<os>-<arch> for $(PLATFORMS)
 		GOOS=$$os GOARCH=$$arch $(GOBUILD) -o dist/devbox-$$os-$$arch ./cmd/devbox; \
 	done
 
+reprovision: build install
+	./devbox reprovision
+
 clean: ## Remove ./devbox and dist/
 	rm -rf devbox dist
 
