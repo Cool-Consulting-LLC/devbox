@@ -7,9 +7,9 @@
 #   8%  31% 12% 20%  $0.42 12m +80/-12  Fable 5.1
 #
 # Segments, each omitted when it does not apply, never an error:
-#   - directory (project name cut to its last 7 characters) and git state, or
-#     at a project root that is not a repo, how many repos it holds and how
-#     many have changes
+#   - the repo being worked on (its name cut to its last 7 characters) and
+#     its git state, or at a project root that is not a repo, no name, just
+#     how many repos it holds and how many have changes
 #   - RC: green while Remote Control is connected, red while it is off.
 #     Claude Code sets CLAUDE_CODE_BRIDGE_SESSION_ID for exactly as long as
 #     it is connected, and this inherits it
@@ -76,12 +76,19 @@ segments=()
 # project root holding repos. cwd may be below it.
 dir=${cwd:-$PWD}
 root=${project_dir:-$dir}
+# Name the repo being worked on, not the project: the repo under the project
+# root that cwd is in, or the project itself when it is a repo (the old
+# layout). At a project root holding repos, no name.
 name=$(basename "$root")
-(( ${#name} > 7 )) && name="...${name: -7}"
-seg="${BOLD}${name}${RESET}"
-if [ "$dir" != "$root" ]; then
-  seg+="${DIM}/${dir#"$root"/}${RESET}"
+if [ ! -e "$root/.git" ]; then
+  case $dir in
+    "$root"/*) rel=${dir#"$root"/}; name=${rel%%/*} ;;
+    "$root") name="" ;;
+    *) name=$(basename "$dir") ;;
+  esac
 fi
+(( ${#name} > 7 )) && name="...${name: -7}"
+seg=${name:+${BOLD}${name}${RESET}}
 if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   branch=$(git -C "$dir" symbolic-ref --short -q HEAD 2>/dev/null \
     || git -C "$dir" rev-parse --short HEAD 2>/dev/null)
@@ -107,7 +114,8 @@ else
     [ "$nd" -gt 0 ] && seg+=" ${YELLOW}${nd}*${RESET}"
   fi
 fi
-segments+=("$seg")
+seg=${seg# }
+[ -n "$seg" ] && segments+=("$seg")
 
 # Remote Control: green when the session can be driven from claude.ai or the
 # phone, red when it cannot.

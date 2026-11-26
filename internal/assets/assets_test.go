@@ -253,6 +253,19 @@ func TestStatusLine(t *testing.T) {
 	if !strings.Contains(out, "2 repos\x1b[0m \x1b[33m1*") {
 		t.Errorf("project root: %q", out)
 	}
+	if !strings.HasPrefix(out, "\x1b[36m2 repos") {
+		t.Errorf("project root has a name: %q", out)
+	}
+	// In a repo, or below it: the repo's name alone.
+	if err := os.MkdirAll(filepath.Join(proj, "a", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, cwd := range []string{"a", "a/sub"} {
+		out := run(`{"workspace":{"current_dir":"` + proj + "/" + cwd + `","project_dir":"` + proj + `"}}`)
+		if !strings.Contains(out, "\x1b[1ma\x1b[0m \x1b[36m⎇") || strings.Contains(out, "proj") || strings.Contains(out, "sub") {
+			t.Errorf("in %s: %q", cwd, out)
+		}
+	}
 }
 
 func TestGcloudAdopt(t *testing.T) {

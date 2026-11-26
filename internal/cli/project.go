@@ -34,15 +34,6 @@ moves one into it.`,
 
 var repoNameRe = regexp.MustCompile(`([^/:]+)/([^/]+?)(\.git)?/?$`)
 
-// DirFor turns git@github.com:acme/api.git into acme-api.
-func DirFor(repo string) string {
-	m := repoNameRe.FindStringSubmatch(repo)
-	if m == nil {
-		return ""
-	}
-	return m[1] + "-" + m[2]
-}
-
 // RepoName turns git@github.com:acme/api.git into api.
 func RepoName(repo string) string {
 	m := repoNameRe.FindStringSubmatch(repo)
@@ -174,14 +165,11 @@ in, never from a parent directory.
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo := args[0]
-			if project == "" {
-				project = DirFor(repo)
-			}
 			if dir == "" {
 				dir = RepoName(repo)
 			}
-			if project == "" || dir == "" {
-				return fmt.Errorf("cannot derive a directory from %q; pass --project and --dir", repo)
+			if dir == "" {
+				return fmt.Errorf("cannot derive a directory from %q; pass --dir", repo)
 			}
 			if err := checkDirName("--project", project); err != nil {
 				return err
@@ -208,8 +196,9 @@ in, never from a parent directory.
 			return t.Run(ctx, remote.Join(words...), nil)
 		},
 	}
-	cmd.Flags().StringVar(&project, "project", "", "project directory under /srv/code (default: <owner>-<repo>)")
+	cmd.Flags().StringVar(&project, "project", "", "project directory under /srv/code (required)")
 	cmd.Flags().StringVar(&dir, "dir", "", "the clone's directory inside the project (default: <repo>)")
+	_ = cmd.MarkFlagRequired("project")
 	ef.add(cmd)
 	rf.add(cmd)
 	return cmd
