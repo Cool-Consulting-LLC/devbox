@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -247,7 +248,7 @@ func TestStatusLine(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(aws, "credentials"), []byte("[default]\naws_access_key_id = AKIAEXAMPLE\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if out := run("{}", awsEnv...); !strings.Contains(out, "  aws:acme  ") || strings.Contains(out, "eu-west-1") {
+	if out := run("{}", awsEnv...); !regexp.MustCompile(`  aws:acme(  |$)`).MatchString(out) || strings.Contains(out, "eu-west-1") {
 		t.Errorf("aws with keys: %q", out)
 	}
 	// Outside a project: the default config, only when it has credentials.
@@ -272,7 +273,7 @@ func TestStatusLine(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if out := defaults(); !strings.Contains(out, "  gcp:default  aws:default  ") {
+	if out := defaults(); !regexp.MustCompile(`  gcp:default  aws:default(  |$)`).MatchString(out) {
 		t.Errorf("default with credentials: %q", out)
 	}
 	// Remote Control off.
