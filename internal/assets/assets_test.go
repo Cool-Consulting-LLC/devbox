@@ -156,18 +156,48 @@ func TestGuardHook(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not installed")
 	}
-	deny := []string{
-		"git push", "git  push origin main", `eval "git push"`, "sh -c 'git push'",
-		"cd x && git commit -m hi", "git -C /srv/code/x push", "git -c user.name=x commit",
-		"/usr/bin/git push", "terraform -chdir=infra apply", "terraform apply -auto-approve",
-		"devbox destroy --all", "sudo git push", "echo $(git push)", "ls | xargs git commit",
-		"git --no-pager push", "true;git push",
+	// Keyed by a word of the reason each must be denied with.
+	deny := map[string][]string{
+		"Commits": {
+			"git push", "git  push origin main", `eval "git push"`, "sh -c 'git push'",
+			"cd x && git commit -m hi", "git -C /srv/code/x push", "git -c user.name=x commit",
+			"/usr/bin/git push", "terraform -chdir=infra apply", "terraform apply -auto-approve",
+			"devbox destroy --all", "sudo git push", "echo $(git push)", "ls | xargs git commit",
+			"git --no-pager push", "true;git push", "FOO=1 git push", "timeout 10 git push",
+		},
+		"Remote": {
+			"ssh host", "sudo ssh x", "/usr/bin/scp a b:", "cd x && sftp h", "bash -c 'mosh h'",
+			"rsync -a d/ host:d/", "rsync -e ssh a b", "rsync -av --rsh=ssh a b", "rsync a rsync://h/m",
+			"gcloud --project p compute ssh vm", "gcloud beta compute scp a vm:", "nohup ssh h",
+		},
+		"SSM": {"aws ssm start-session --target i-1", "aws --profile p ssm send-command --document-name x"},
+		"read-only": {
+			"aws s3 rm s3://b/k", "aws s3 cp a s3://b/", "aws ec2 terminate-instances --instance-ids i-1",
+			"env AWS_PROFILE=x aws iam create-user --user-name u", "aws $op", "echo $(aws s3 cp a b)",
+			"aws configure get aws_secret_access_key", "aws ec2 describe-instances && aws s3 rm s3://b/k",
+			"/usr/local/bin/aws s3 mb s3://b", "aws", "aws --frobnicate ec2 describe-instances",
+			"aws ec2 \\\n  terminate-instances --instance-ids i-1", "bash -c 'aws s3 ls; aws s3 rm s3://b/k'",
+		},
+		"secrets": {
+			"aws secretsmanager get-secret-value --secret-id x",
+			"aws ssm get-parameter --name x --with-decryption", `aws ssm get-parameters --names "x" --with-decryption`,
+			"aws ecr get-login-password", "aws sts get-session-token", "aws sts assume-role --role-arn r",
+			"aws eks get-token --cluster-name c", "aws ec2 get-password-data --instance-id i-1",
+		},
 	}
 	allow := []string{
 		"git status", "git log --oneline", "terraform plan", "git commit-tree", "grep pushd file",
 		"echo git push is bad", "git pushx", "devbox status", "terraform apply-something",
+		"ssh-add -l", "ssh-keygen -t ed25519", "mosh-server new", "rsync -a a/ b/",
+		"rsync -avz --exclude=.git --delete a/ b/", "git fetch", "echo ssh is down",
+		"gcloud compute instances list", "aws ec2 describe-instances",
+		"aws --region eu-west-2 --output json logs describe-log-groups", "aws sts get-caller-identity",
+		"aws cloudtrail lookup-events", "aws ssm get-parameter --name x", "aws s3 ls s3://b/",
+		"aws logs tail /aws/lambda/f", "aws configure list", "aws configure list-profiles", "aws --version",
+		"devbox-aws-login", "aws --profile=p s3 ls", `aws s3 ls "s3://b/my dir/"`,
+		"aws ec2 describe-instances --query 'Reservations[].Instances[].InstanceId' | jq .",
 	}
-	run := func(cmd string) bool {
+	run := func(cmd string) string {
 		in, _ := json.Marshal(map[string]any{"tool_input": map[string]string{"command": cmd}})
 		c := exec.Command(p)
 		c.Stdin = strings.NewReader(string(in))
@@ -175,16 +205,27 @@ func TestGuardHook(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%q: %v", cmd, err)
 		}
-		return strings.Contains(string(out), `"deny"`)
+		if len(out) == 0 {
+			return ""
+		}
+		var r struct {
+			HookSpecificOutput struct{ PermissionDecision, PermissionDecisionReason string }
+		}
+		if err := json.Unmarshal(out, &r); err != nil || r.HookSpecificOutput.PermissionDecision != "deny" {
+			t.Fatalf("%q: bad output %q", cmd, out)
+		}
+		return r.HookSpecificOutput.PermissionDecisionReason
 	}
-	for _, c := range deny {
-		if !run(c) {
-			t.Errorf("not denied: %s", c)
+	for want, cmds := range deny {
+		for _, c := range cmds {
+			if got := run(c); !strings.Contains(got, want) {
+				t.Errorf("%q: reason %q, want one with %q", c, got, want)
+			}
 		}
 	}
 	for _, c := range allow {
-		if run(c) {
-			t.Errorf("wrongly denied: %s", c)
+		if got := run(c); got != "" {
+			t.Errorf("wrongly denied: %s (%s)", c, got)
 		}
 	}
 }
