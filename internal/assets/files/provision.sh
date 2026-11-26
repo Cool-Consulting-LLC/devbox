@@ -314,6 +314,39 @@ if ! aws_install; then
   echo "aws: keeping $(/usr/local/bin/aws --version)" >&2
 fi
 
+# The Session Manager plugin, for aws ssm start-session: the newest .deb from
+# AWS, checked against the plugin's signing key in
+# /etc/devbox/session-manager-plugin.asc (7959 6371 24CE 093A D501 D47A 2C4D
+# 4AFF 6F67 57EE), and skipped while the signature is unchanged, as above. The
+# package's systemd unit is left disabled; the plugin runs only under aws.
+smp_install() {
+  local url tmp sig=/usr/local/sessionmanagerplugin/.devbox-sig
+  case $(uname -m) in
+    x86_64) url=ubuntu_64bit ;;
+    aarch64) url=ubuntu_arm64 ;;
+    *) echo "session-manager-plugin: no build for $(uname -m)" >&2; return 1 ;;
+  esac
+  url=https://s3.amazonaws.com/session-manager-downloads/plugin/latest/$url/session-manager-plugin.deb
+  tmp=$(mktemp -d)
+  curl -fsSL "$url.sig" -o "$tmp/smp.deb.sig" || { rm -rf "$tmp"; echo "session-manager-plugin: cannot fetch $url.sig" >&2; return 1; }
+  if [ -x /usr/local/bin/session-manager-plugin ] && cmp -s "$tmp/smp.deb.sig" "$sig"; then
+    rm -rf "$tmp"; return 0
+  fi
+  gpg --dearmor < /etc/devbox/session-manager-plugin.asc > "$tmp/smp.gpg"
+  curl -fsSL "$url" -o "$tmp/smp.deb" \
+    && gpgv --keyring "$tmp/smp.gpg" "$tmp/smp.deb.sig" "$tmp/smp.deb" 2>/dev/null \
+    || { rm -rf "$tmp"; echo "session-manager-plugin: $url failed to download or verify; refusing" >&2; return 1; }
+  dpkg -i "$tmp/smp.deb" >/dev/null \
+    || { rm -rf "$tmp"; echo "session-manager-plugin: install failed" >&2; return 1; }
+  install -m 0644 "$tmp/smp.deb.sig" "$sig"
+  rm -rf "$tmp"
+  echo "session-manager-plugin $(/usr/local/bin/session-manager-plugin --version)"
+}
+if ! smp_install; then
+  [ -x /usr/local/bin/session-manager-plugin ] || exit 1
+  echo "session-manager-plugin: keeping $(/usr/local/bin/session-manager-plugin --version)" >&2
+fi
+
 step mermaid
 # mmdc renders in puppeteer's chrome-headless-shell; the libraries it needs
 # beyond the base image are in the apt list above. npm ci installs exactly the

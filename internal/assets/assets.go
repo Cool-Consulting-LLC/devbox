@@ -49,6 +49,7 @@ var boxFiles = []boxFile{
 	{"box/devbox-ssh-agent.conf", "/etc/systemd/system/devbox-ssh-agent.service.d/devbox-load-key.conf", "0644"},
 	{"box/needrestart.conf", "/etc/needrestart/conf.d/devbox.conf", "0644"},
 	{"box/aws-cli.asc", "/etc/devbox/aws-cli.asc", "0644"},
+	{"box/session-manager-plugin.asc", "/etc/devbox/session-manager-plugin.asc", "0644"},
 	{"box/devbox-enroll", "/usr/local/sbin/devbox-enroll", "0755"},
 	{"box/mosh-server", "/usr/local/bin/mosh-server", "0755"},
 	{"box/idle-check.sh", "/usr/local/sbin/devbox-idle-check", "0755"},
