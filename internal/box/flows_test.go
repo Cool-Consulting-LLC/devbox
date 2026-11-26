@@ -629,7 +629,7 @@ func TestStatusCost(t *testing.T) {
 	if err := e.b.Status(e.ctx, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"3.0 h running", "per month running", "$120.95", "per month suspended", "$12.32"} {
+	for _, want := range []string{"3.0 h running", "per month running", "$123.35", "per month suspended", "$14.72"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
 		}

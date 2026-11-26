@@ -39,7 +39,7 @@ type Config struct {
 	MachineType string `yaml:"machine_type" describe:"Compute machine type. Must be suspend-capable; E2 is the only family that reports guest memory without an agent." tier:"restart" default:"e2-standard-4"`
 	ExternalIP  *bool  `yaml:"external_ip" describe:"Give the instance an ephemeral external IP for egress. Set false only if the subnet has Cloud NAT and Private Google Access." tier:"in-place" default:"true"`
 	CodeDiskGB  int64  `yaml:"code_disk_gb" describe:"Size of the /srv/code pet disk. Grow only; shrinking is refused." tier:"reprovision" default:"50"`
-	BootDiskGB  int64  `yaml:"boot_disk_gb" describe:"Size of the boot disk. Grow only; shrinking is refused." tier:"reprovision" default:"30"`
+	BootDiskGB  int64  `yaml:"boot_disk_gb" describe:"Size of the boot disk. Grow only; shrinking is refused." tier:"reprovision" default:"50"`
 
 	Timezone      string   `yaml:"timezone" describe:"System timezone, an IANA name such as Europe/Amsterdam. Sets the clock in the shell, tmux and Claude Code; snapshots.start_time stays in UTC." tier:"reprovision" default:"UTC"`
 	ExtraPackages []string `yaml:"extra_packages" describe:"Extra apt packages, usually language runtimes, installed by provision.sh." tier:"reprovision" default:"[]"`
@@ -110,7 +110,7 @@ func Defaults() *Config {
 		MachineType: "e2-standard-4",
 		ExternalIP:  boolPtr(true),
 		CodeDiskGB:  50,
-		BootDiskGB:  30,
+		BootDiskGB:  50,
 		Timezone:    "UTC",
 		Tailscale:   Tailscale{Tag: "tag:devbox", OAuthSecret: "devbox-tailscale-oauth"},
 		SSHKey:      SSHKey{Secret: "devbox-ssh-key"},
