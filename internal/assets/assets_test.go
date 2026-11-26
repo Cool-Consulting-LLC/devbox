@@ -211,8 +211,9 @@ func TestStatusLine(t *testing.T) {
 		}
 		return string(out)
 	}
-	// Nothing known: still a line, never an error.
-	if out := run("{}"); !strings.Contains(out, "no ADC") {
+	// Nothing known: still a line, never an error. The project's gcloud config
+	// has no ADC yet: red.
+	if out := run("{}"); !strings.Contains(out, "\x1b[31mgcp:gcloud\x1b[0m") {
 		t.Errorf("empty input: %q", out)
 	}
 	// A project session with ADC: identity, meters, model.
@@ -223,34 +224,56 @@ func TestStatusLine(t *testing.T) {
 		`"context_window":{"used_percentage":31.4},"rate_limits":{"five_hour":{"used_percentage":12}},` +
 		`"cost":{"total_cost_usd":0.42,"total_duration_ms":4521000,"total_lines_added":8,"total_lines_removed":1}}`
 	out := run(in, "CLOUDSDK_CORE_PROJECT=acme-prod", "CLOUDSDK_COMPUTE_REGION=europe-west2")
-	for _, want := range []string{"gcloud@acme-prod/europe-west2", "✓", "31%\x1b[0m \x1b[32m12%\x1b[0m  ", "$0.42 1h15m +8/-1", "Opus"} {
+	for _, want := range []string{"RC\x1b[0m  gcp:gcloud  ", "31%\x1b[0m \x1b[32m12%\x1b[0m  ", "$0.42 1h15m +8/-1", "Opus"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in %q", want, out)
 		}
 	}
-	if strings.Contains(out, "no ADC") || strings.Contains(out, "12%\x1b[0m \x1b") {
+	if strings.Contains(out, "acme-prod") || strings.Contains(out, "europe-west2") || strings.Contains(out, "12%\x1b[0m \x1b") {
 		t.Errorf("unexpected segment in %q", out)
 	}
 	if strings.Contains(out, "aws:") {
 		t.Errorf("aws segment without an AWS account: %q", out)
 	}
-	// An AWS account: name, account ID, region; keys or not.
+	// An AWS account: its name alone, red without keys.
 	aws := filepath.Join(dir, "aws", "acme")
 	if err := os.MkdirAll(aws, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	awsEnv := []string{"AWS_SHARED_CREDENTIALS_FILE=" + filepath.Join(aws, "credentials"), "AWS_REGION=eu-west-1"}
-	if out := run("{}", awsEnv...); !strings.Contains(out, "aws:acme/eu-west-1 \x1b[31mno keys") {
+	if out := run("{}", awsEnv...); !strings.Contains(out, "\x1b[31maws:acme\x1b[0m") {
 		t.Errorf("aws without keys: %q", out)
 	}
 	if err := os.WriteFile(filepath.Join(aws, "credentials"), []byte("[default]\naws_access_key_id = AKIAEXAMPLE\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(aws, "devbox-identity"), []byte("123456789012\tarn:aws:iam::123456789012:user/ci\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out := run("{}", awsEnv...); !strings.Contains(out, "aws:acme@123456789012/eu-west-1 ") || strings.Contains(out, "no keys") {
+	if out := run("{}", awsEnv...); !strings.Contains(out, "  aws:acme  ") || strings.Contains(out, "eu-west-1") {
 		t.Errorf("aws with keys: %q", out)
+	}
+	// Outside a project: the default config, only when it has credentials.
+	defaults := func(env ...string) string {
+		c := exec.Command(p)
+		c.Stdin = strings.NewReader("{}")
+		c.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir}, env...)
+		out, err := c.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	if out := defaults(); strings.Contains(out, "gcp:") || strings.Contains(out, "aws:") {
+		t.Errorf("default without credentials: %q", out)
+	}
+	for f, body := range map[string]string{".config/gcloud/application_default_credentials.json": "{}", ".aws/credentials": "aws_access_key_id = AKIAX\n"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out := defaults(); !strings.Contains(out, "  gcp:default  aws:default  ") {
+		t.Errorf("default with credentials: %q", out)
 	}
 	// Remote Control off.
 	if !strings.Contains(out, "\x1b[31mRC\x1b[0m") {
@@ -381,7 +404,7 @@ func TestAwsLogin(t *testing.T) {
 case $1 in
   configure) exit 0 ;;
   sts) grep -q AKIAGOOD "$AWS_SHARED_CREDENTIALS_FILE" || { echo "InvalidClientTokenId" >&2; exit 254; }
-       printf '123456789012\tarn:aws:iam::123456789012:user/ci\n' ;;
+       echo arn:aws:iam::123456789012:user/ci ;;
 esac
 `, 0o755)
 	root := filepath.Join(dir, "aws")
@@ -405,15 +428,9 @@ esac
 	if fi, err := os.Stat(creds); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("credentials mode: %v %v", fi.Mode(), err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(root, "acme/devbox-identity")); !strings.HasPrefix(string(b), "123456789012\t") {
-		t.Errorf("identity: %q", b)
-	}
-	// Keys STS rejects are kept, but the identity goes and it fails.
+	// Keys STS rejects are kept, but it fails.
 	if out, err := run("AKIABAD123456789\nx\n", "acme"); err == nil || !strings.Contains(out, "rejected") {
 		t.Errorf("bad keys: %v: %s", err, out)
-	}
-	if _, err := os.Stat(filepath.Join(root, "acme/devbox-identity")); err == nil {
-		t.Error("identity kept for rejected keys")
 	}
 	for _, c := range []struct{ stdin, arg string }{{"AKIAGOOD12345678\nx\n", "../x"}, {"not-a-key\nx\n", "acme"}, {"AKIAGOOD12345678\n", "acme"}} {
 		if _, err := run(c.stdin, c.arg); err == nil {

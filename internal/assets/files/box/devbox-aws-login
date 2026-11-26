@@ -46,10 +46,8 @@ if [ -z "$(aws configure get region 2>/dev/null || true)" ] && [ -t 0 ]; then
 fi
 
 name=$(basename "$dir")
-if id=$(aws sts get-caller-identity --query '[Account, Arn]' --output text 2>&1); then
-  printf '%s\n' "$id" > "$dir/devbox-identity"
-  echo "$name: ${id#*$'\t'}"
+if arn=$(aws sts get-caller-identity --query Arn --output text 2>&1); then
+  echo "$name: $arn"
 else
-  rm -f "$dir/devbox-identity"
-  die "$name: keys stored, but AWS rejected them: $id"
+  die "$name: keys stored, but AWS rejected them: $arn"
 fi
