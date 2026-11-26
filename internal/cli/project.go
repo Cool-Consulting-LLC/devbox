@@ -52,17 +52,34 @@ func checkDirName(flag, name string) error {
 	return nil
 }
 
-var gcloudConfigRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var configNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+func checkConfigName(flag, name string) error {
+	if !configNameRe.MatchString(name) {
+		return fmt.Errorf("%s %q: use letters, digits, '.', '_' and '-', not starting with '.' or '-'", flag, name)
+	}
+	return nil
+}
 
 // GcloudEnv points gcloud, client libraries and kubectl at /srv/code/.gcloud/<name>.
 func GcloudEnv(name string) ([]string, error) {
-	if !gcloudConfigRe.MatchString(name) {
-		return nil, fmt.Errorf("--gcloud-config %q: use letters, digits, '.', '_' and '-', not starting with '.' or '-'", name)
+	if err := checkConfigName("--gcloud-config", name); err != nil {
+		return nil, err
 	}
 	base := "/srv/code/.gcloud/" + name
 	return []string{"CLOUDSDK_CONFIG=" + base,
 		"GOOGLE_APPLICATION_CREDENTIALS=" + base + "/application_default_credentials.json",
 		"KUBECONFIG=" + base + "/kubeconfig"}, nil
+}
+
+// AwsEnv points the AWS CLI and SDKs at the config and keys in /srv/code/.aws/<name>.
+func AwsEnv(name string) ([]string, error) {
+	if err := checkConfigName("--aws-config", name); err != nil {
+		return nil, err
+	}
+	base := "/srv/code/.aws/" + name
+	return []string{"AWS_CONFIG_FILE=" + base + "/config",
+		"AWS_SHARED_CREDENTIALS_FILE=" + base + "/credentials"}, nil
 }
 
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -71,12 +88,17 @@ const envFlagsHelp = `  --gcloud-config NAME  CLOUDSDK_CONFIG, GOOGLE_APPLICATIO
                         KUBECONFIG under /srv/code/.gcloud/NAME
   --gcp-project ID      CLOUDSDK_CORE_PROJECT and GOOGLE_CLOUD_PROJECT
   --region REGION       CLOUDSDK_COMPUTE_REGION
+  --aws-config NAME     AWS_CONFIG_FILE and AWS_SHARED_CREDENTIALS_FILE under
+                        /srv/code/.aws/NAME; store its keys with
+                        devbox-aws-login NAME on the box
+  --aws-region REGION   AWS_REGION and AWS_DEFAULT_REGION
   --env KEY=VALUE       anything else; repeatable. Secrets go through
                         ` + "`devbox project secret`" + `, never here.`
 
 // envFlags are the .devbox-env variables `project add` and `project set` share.
 type envFlags struct {
 	gcloudConfig, gcpProject, region string
+	awsConfig, awsRegion             string
 	env                              []string
 }
 
@@ -84,6 +106,8 @@ func (f *envFlags) add(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.gcloudConfig, "gcloud-config", "", "gcloud config directory name under /srv/code/.gcloud")
 	cmd.Flags().StringVar(&f.gcpProject, "gcp-project", "", "default GCP project for this project's sessions")
 	cmd.Flags().StringVar(&f.region, "region", "", "default compute region")
+	cmd.Flags().StringVar(&f.awsConfig, "aws-config", "", "AWS account directory name under /srv/code/.aws")
+	cmd.Flags().StringVar(&f.awsRegion, "aws-region", "", "default AWS region for this project's sessions")
 	cmd.Flags().StringArrayVar(&f.env, "env", nil, "extra KEY=VALUE, repeatable")
 }
 
@@ -103,6 +127,16 @@ func (f *envFlags) kv() ([]string, error) {
 	if f.region != "" {
 		kv = append(kv, "CLOUDSDK_COMPUTE_REGION="+f.region)
 	}
+	if f.awsConfig != "" {
+		ac, err := AwsEnv(f.awsConfig)
+		if err != nil {
+			return nil, err
+		}
+		kv = append(kv, ac...)
+	}
+	if f.awsRegion != "" {
+		kv = append(kv, "AWS_REGION="+f.awsRegion, "AWS_DEFAULT_REGION="+f.awsRegion)
+	}
 	for _, e := range f.env {
 		k, v, ok := strings.Cut(e, "=")
 		if !ok || !envKeyRe.MatchString(k) {
@@ -121,6 +155,8 @@ var unsetAliases = map[string][]string{
 	"gcloud-config": {"CLOUDSDK_CONFIG", "GOOGLE_APPLICATION_CREDENTIALS", "KUBECONFIG"},
 	"gcp-project":   {"CLOUDSDK_CORE_PROJECT", "GOOGLE_CLOUD_PROJECT"},
 	"region":        {"CLOUDSDK_COMPUTE_REGION"},
+	"aws-config":    {"AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"},
+	"aws-region":    {"AWS_REGION", "AWS_DEFAULT_REGION"},
 }
 
 // UnsetWords turns --unset values into -KEY words for devbox-project.
@@ -130,7 +166,7 @@ func UnsetWords(unset []string) ([]string, error) {
 		keys, ok := unsetAliases[u]
 		if !ok {
 			if !envKeyRe.MatchString(u) {
-				return nil, fmt.Errorf("--unset %q: not a variable name or one of gcloud-config, gcp-project, region", u)
+				return nil, fmt.Errorf("--unset %q: not a variable name or one of gcloud-config, gcp-project, region, aws-config, aws-region", u)
 			}
 			keys = []string{u}
 		}
@@ -161,7 +197,8 @@ in, never from a parent directory.
 ` + envFlagsHelp,
 		Example: `  devbox project add git@github.com:acme/api.git --project acme \
     --gcloud-config client-a --gcp-project acme-prod --region europe-west2
-  devbox project add git@github.com:acme/web.git --project acme`,
+  devbox project add git@github.com:acme/web.git --project acme \
+    --aws-config acme --aws-region eu-west-1`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo := args[0]
@@ -401,8 +438,9 @@ func projectSetCmd(g *globals) *cobra.Command {
 
 ` + envFlagsHelp + `
   --unset KEY           remove a variable; repeatable. gcloud-config,
-                        gcp-project and region remove what those flags set,
-                        so the project falls back to /srv/code/.gcloud/default.
+                        gcp-project, region, aws-config and aws-region remove
+                        what those flags set, so the project falls back to
+                        /srv/code/.gcloud/default and ~/.aws.
   --recreate            restart the project's tmux session now so it picks up
                         the change. This kills whatever is running in it.
 
@@ -410,6 +448,7 @@ Without --recreate the running session keeps the old values. Claude Code
 sessions read settings.local.json at start, so restart those too.`,
 		Example: `  devbox project set acme-api --gcloud-config client-b --gcp-project acme-staging
   devbox project set acme-api --unset gcloud-config --recreate
+  devbox project set acme-api --aws-config acme-staging --aws-region us-east-1
   devbox project set acme-api --env LOG_LEVEL=debug --unset OLD_FLAG`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -444,7 +483,7 @@ sessions read settings.local.json at start, so restart those too.`,
 		},
 	}
 	ef.add(cmd)
-	cmd.Flags().StringArrayVar(&unset, "unset", nil, "remove a variable, or gcloud-config|gcp-project|region; repeatable")
+	cmd.Flags().StringArrayVar(&unset, "unset", nil, "remove a variable, or gcloud-config|gcp-project|region|aws-config|aws-region; repeatable")
 	cmd.Flags().BoolVar(&recreate, "recreate", false, "restart the project's tmux session now")
 	rf.add(cmd)
 	return cmd

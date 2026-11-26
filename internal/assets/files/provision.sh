@@ -53,6 +53,8 @@ shared_dir /srv/code/.home 3775
 shared_dir /srv/code/.gcloud 3775
 shared_dir /srv/code/_out 3775
 shared_dir /srv/code/.gcloud/default 2775
+shared_dir /srv/code/.aws 3775
+shared_dir /srv/code/.aws/default 2775
 
 # Nobody on the box has general sudo. Agents run as you, so whatever you can
 # sudo, they can. OS Login still writes NOPASSWD grants for admins into
@@ -243,7 +245,7 @@ if [ "$need_update" = 1 ] || [ -z "$(find /var/lib/apt/lists -maxdepth 0 -mmin -
   apt_get update -q
 fi
 # shellcheck disable=SC2086
-apt_get install -y -q acl claude-code gh golang-go nodejs python3-pytest ruby-bundler ruby-dev libssl-dev tailscale terraform \
+apt_get install -y -q acl claude-code gh golang-go nodejs python3-pytest ruby-bundler ruby-dev libssl-dev shellcheck tailscale terraform unzip \
   libnspr4 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libxdamage1 libasound2t64 fonts-liberation \
   docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin uidmap slirp4netns \
   $DEVBOX_EXTRA_PACKAGES
@@ -278,6 +280,39 @@ release_bin ruff 0.17.0 \
   c94fc1dc71f054d06d9f1149442dcb471516aa2b7d4b7e8124e05d082d4c91d3 \
   294e181ba6ccb0c2ffd778580e3c42b19f038bdbcb844f39fd9a6a26e8148804 \
   ruff
+
+step aws
+# AWS CLI v2, which Ubuntu does not package: the newest release, from AWS's zip,
+# checked against the AWS CLI team's signing key in /etc/devbox/aws-cli.asc
+# (FB5D B77F D5C1 18B8 0511 ADA8 A631 0ACC 4672 475C). The signature changes
+# with every release, so fetching it alone tells whether there is a new one.
+# Offline, or caught between AWS uploading a zip and its signature, an
+# installed CLI is kept and the step warns; with none installed, it fails.
+aws_install() {
+  local url tmp
+  url=https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip
+  tmp=$(mktemp -d)
+  curl -fsSL "$url.sig" -o "$tmp/awscli.zip.sig" || { rm -rf "$tmp"; echo "aws: cannot fetch $url.sig" >&2; return 1; }
+  if [ -x /usr/local/bin/aws ] && cmp -s "$tmp/awscli.zip.sig" /usr/local/aws-cli/.devbox-sig; then
+    rm -rf "$tmp"; return 0
+  fi
+  gpg --dearmor < /etc/devbox/aws-cli.asc > "$tmp/aws-cli.gpg"
+  curl -fsSL "$url" -o "$tmp/awscli.zip" \
+    && gpgv --keyring "$tmp/aws-cli.gpg" "$tmp/awscli.zip.sig" "$tmp/awscli.zip" 2>/dev/null \
+    || { rm -rf "$tmp"; echo "aws: $url failed to download or verify; refusing" >&2; return 1; }
+  # Called from an if, so set -e is off here: a failed step must return, or
+  # its signature would be recorded and the broken install never retried.
+  unzip -q "$tmp/awscli.zip" -d "$tmp" \
+    && "$tmp/aws/install" --update -i /usr/local/aws-cli -b /usr/local/bin >/dev/null \
+    || { rm -rf "$tmp"; echo "aws: install failed" >&2; return 1; }
+  install -m 0644 "$tmp/awscli.zip.sig" /usr/local/aws-cli/.devbox-sig
+  rm -rf "$tmp"
+  /usr/local/bin/aws --version
+}
+if ! aws_install; then
+  [ -x /usr/local/bin/aws ] || exit 1
+  echo "aws: keeping $(/usr/local/bin/aws --version)" >&2
+fi
 
 step mermaid
 # mmdc renders in puppeteer's chrome-headless-shell; the libraries it needs

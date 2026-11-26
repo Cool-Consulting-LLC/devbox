@@ -23,6 +23,21 @@ func TestGcloudEnv(t *testing.T) {
 	}
 }
 
+func TestAwsEnv(t *testing.T) {
+	got, err := AwsEnv("acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, " ") != "AWS_CONFIG_FILE=/srv/code/.aws/acme/config AWS_SHARED_CREDENTIALS_FILE=/srv/code/.aws/acme/credentials" {
+		t.Errorf("AwsEnv(acme) = %q", got)
+	}
+	for _, bad := range []string{"", ".", "..", "../x", "a/b", "-x", ".hidden", "a b"} {
+		if _, err := AwsEnv(bad); err == nil {
+			t.Errorf("AwsEnv(%q) accepted", bad)
+		}
+	}
+}
+
 func TestUnsetWords(t *testing.T) {
 	got, err := UnsetWords([]string{"region", "FOO"})
 	if err != nil {
@@ -30,6 +45,13 @@ func TestUnsetWords(t *testing.T) {
 	}
 	if strings.Join(got, " ") != "-CLOUDSDK_COMPUTE_REGION -FOO" {
 		t.Errorf("UnsetWords = %q", got)
+	}
+	got, err = UnsetWords([]string{"aws-config", "aws-region"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, " ") != "-AWS_CONFIG_FILE -AWS_SHARED_CREDENTIALS_FILE -AWS_REGION -AWS_DEFAULT_REGION" {
+		t.Errorf("UnsetWords(aws) = %q", got)
 	}
 	for _, bad := range []string{"", "-FOO", "A=B", "1X"} {
 		if _, err := UnsetWords([]string{bad}); err == nil {
@@ -47,7 +69,14 @@ func TestEnvFlagsKV(t *testing.T) {
 	if len(got) != 5 || got[3] != "CLOUDSDK_COMPUTE_REGION=r" || got[4] != "A=b=c" {
 		t.Errorf("kv = %q", got)
 	}
-	for _, bad := range []envFlags{{env: []string{"NOEQ"}}, {env: []string{"K=@secret:x"}}, {gcloudConfig: "../x"}} {
+	f = envFlags{awsConfig: "acme", awsRegion: "eu-west-1"}
+	if got, err = f.kv(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || got[1] != "AWS_SHARED_CREDENTIALS_FILE=/srv/code/.aws/acme/credentials" || got[2] != "AWS_REGION=eu-west-1" || got[3] != "AWS_DEFAULT_REGION=eu-west-1" {
+		t.Errorf("kv(aws) = %q", got)
+	}
+	for _, bad := range []envFlags{{env: []string{"NOEQ"}}, {env: []string{"K=@secret:x"}}, {gcloudConfig: "../x"}, {awsConfig: "../x"}} {
 		if _, err := bad.kv(); err == nil {
 			t.Errorf("kv(%+v) accepted", bad)
 		}

@@ -34,6 +34,7 @@ if [ -n "${USER:-}" ] && [ "$USER" != root ] && [ -w /srv/code ]; then
   }
   __devbox_persist "$HOME/.claude" "/srv/code/.home/$USER/claude"
   __devbox_persist "$HOME/.config/gcloud" "/srv/code/.gcloud/default"
+  __devbox_persist "$HOME/.aws" "/srv/code/.aws/default"
   export CLAUDE_CONFIG_DIR="/srv/code/.home/$USER/claude"
   unset -f __devbox_persist
 

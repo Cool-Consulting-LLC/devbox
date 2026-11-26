@@ -231,6 +231,27 @@ func TestStatusLine(t *testing.T) {
 	if strings.Contains(out, "no ADC") || strings.Contains(out, "12%\x1b[0m \x1b") {
 		t.Errorf("unexpected segment in %q", out)
 	}
+	if strings.Contains(out, "aws:") {
+		t.Errorf("aws segment without an AWS account: %q", out)
+	}
+	// An AWS account: name, account ID, region; keys or not.
+	aws := filepath.Join(dir, "aws", "acme")
+	if err := os.MkdirAll(aws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	awsEnv := []string{"AWS_SHARED_CREDENTIALS_FILE=" + filepath.Join(aws, "credentials"), "AWS_REGION=eu-west-1"}
+	if out := run("{}", awsEnv...); !strings.Contains(out, "aws:acme/eu-west-1 \x1b[31mno keys") {
+		t.Errorf("aws without keys: %q", out)
+	}
+	if err := os.WriteFile(filepath.Join(aws, "credentials"), []byte("[default]\naws_access_key_id = AKIAEXAMPLE\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(aws, "devbox-identity"), []byte("123456789012\tarn:aws:iam::123456789012:user/ci\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out := run("{}", awsEnv...); !strings.Contains(out, "aws:acme@123456789012/eu-west-1 ") || strings.Contains(out, "no keys") {
+		t.Errorf("aws with keys: %q", out)
+	}
 	// Remote Control off.
 	if !strings.Contains(out, "\x1b[31mRC\x1b[0m") {
 		t.Errorf("remote control off: %q", out)
@@ -342,6 +363,65 @@ echo "$*" "$tok" > "$CLOUDSDK_CONFIG/activated"
 	}
 }
 
+func TestAwsLogin(t *testing.T) {
+	dir := t.TempDir()
+	write := func(p, s string, mode os.FileMode) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := filepath.Join(dir, "devbox-aws-login")
+	write(p, read("box/devbox-aws-login"), 0o755)
+	// A fake aws: STS accepts AKIAGOOD only and reports which files it was given.
+	write(filepath.Join(dir, "bin/aws"), `#!/bin/bash
+case $1 in
+  configure) exit 0 ;;
+  sts) grep -q AKIAGOOD "$AWS_SHARED_CREDENTIALS_FILE" || { echo "InvalidClientTokenId" >&2; exit 254; }
+       printf '123456789012\tarn:aws:iam::123456789012:user/ci\n' ;;
+esac
+`, 0o755)
+	root := filepath.Join(dir, "aws")
+	run := func(stdin string, args ...string) (string, error) {
+		c := exec.Command(p, args...)
+		c.Stdin = strings.NewReader(stdin)
+		c.Env = []string{"PATH=" + filepath.Join(dir, "bin") + ":" + os.Getenv("PATH"), "DEVBOX_AWS_DIR=" + root}
+		out, err := c.CombinedOutput()
+		return string(out), err
+	}
+
+	out, err := run("AKIAGOOD12345678\nsEcReT/+x\n", "acme")
+	if err != nil || !strings.Contains(out, "acme: arn:aws:iam::123456789012:user/ci") {
+		t.Fatalf("%v: %s", err, out)
+	}
+	creds := filepath.Join(root, "acme/credentials")
+	b, _ := os.ReadFile(creds)
+	if string(b) != "[default]\naws_access_key_id = AKIAGOOD12345678\naws_secret_access_key = sEcReT/+x\n" {
+		t.Errorf("credentials: %q", b)
+	}
+	if fi, err := os.Stat(creds); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("credentials mode: %v %v", fi.Mode(), err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "acme/devbox-identity")); !strings.HasPrefix(string(b), "123456789012\t") {
+		t.Errorf("identity: %q", b)
+	}
+	// Keys STS rejects are kept, but the identity goes and it fails.
+	if out, err := run("AKIABAD123456789\nx\n", "acme"); err == nil || !strings.Contains(out, "rejected") {
+		t.Errorf("bad keys: %v: %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(root, "acme/devbox-identity")); err == nil {
+		t.Error("identity kept for rejected keys")
+	}
+	for _, c := range []struct{ stdin, arg string }{{"AKIAGOOD12345678\nx\n", "../x"}, {"not-a-key\nx\n", "acme"}, {"AKIAGOOD12345678\n", "acme"}} {
+		if _, err := run(c.stdin, c.arg); err == nil {
+			t.Errorf("accepted %q for %q", c.stdin, c.arg)
+		}
+	}
+}
+
 func TestConfigEnvQuotes(t *testing.T) {
 	c := config.Defaults()
 	c.ProjectID = "p-123456"
@@ -365,7 +445,7 @@ func TestMakeLintCoversBoxScripts(t *testing.T) {
 	}
 	for _, f := range boxFiles {
 		switch filepath.Ext(f.src) {
-		case ".json", ".conf", ".service", ".timer", ".apparmor":
+		case ".json", ".conf", ".service", ".timer", ".apparmor", ".asc":
 			continue
 		}
 		if strings.HasSuffix(f.src, "/.ssh/config") || strings.HasSuffix(f.src, "/.gitconfig") ||

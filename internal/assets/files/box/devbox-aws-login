@@ -1,0 +1,55 @@
+#!/bin/bash
+# devbox-aws-login [NAME]: store an AWS access keypair for an account, then
+# check it with STS.
+#   no NAME: the account of $AWS_SHARED_CREDENTIALS_FILE (a project session's),
+#            else the default, ~/.aws
+#   NAME:    /srv/code/.aws/NAME, as in `devbox project --aws-config`
+# Prompts for the access key ID and, hidden, the secret access key; on a pipe,
+# reads them as two lines. Asks for a default region when the account has none.
+# Running it again replaces the keys.
+set -euo pipefail
+die() { echo "devbox-aws-login: $*" >&2; exit 1; }
+
+# DEVBOX_AWS_DIR is for tests.
+base=${DEVBOX_AWS_DIR:-/srv/code/.aws}
+if [ $# -gt 0 ]; then
+  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad account name $1"
+  dir=$base/$1
+elif [ -n "${AWS_SHARED_CREDENTIALS_FILE:-}" ]; then
+  dir=$(dirname "$AWS_SHARED_CREDENTIALS_FILE")
+else
+  dir=$base/default
+fi
+export AWS_CONFIG_FILE=$dir/config AWS_SHARED_CREDENTIALS_FILE=$dir/credentials
+mkdir -p "$dir"
+
+if [ -t 0 ]; then
+  read -rp "AWS access key ID: " key
+  read -rsp "AWS secret access key (input hidden): " secret; echo
+else
+  read -r key || true
+  read -r secret || true
+fi
+key=${key//[[:space:]]/} secret=${secret//[[:space:]]/}
+[[ $key =~ ^[A-Z0-9]{16,128}$ ]] || die "that is not an access key ID"
+[ -n "$secret" ] || die "empty secret access key"
+
+# Written here, not with `aws configure set`, which would put the secret in
+# argv for anyone running ps to see. printf is a builtin.
+tmp=$(umask 077; mktemp "$AWS_SHARED_CREDENTIALS_FILE.XXXX")
+printf '[default]\naws_access_key_id = %s\naws_secret_access_key = %s\n' "$key" "$secret" > "$tmp"
+mv "$tmp" "$AWS_SHARED_CREDENTIALS_FILE"
+
+if [ -z "$(aws configure get region 2>/dev/null || true)" ] && [ -t 0 ]; then
+  read -rp "Default region (Enter to skip): " region
+  [ -n "$region" ] && aws configure set region "$region"
+fi
+
+name=$(basename "$dir")
+if id=$(aws sts get-caller-identity --query '[Account, Arn]' --output text 2>&1); then
+  printf '%s\n' "$id" > "$dir/devbox-identity"
+  echo "$name: ${id#*$'\t'}"
+else
+  rm -f "$dir/devbox-identity"
+  die "$name: keys stored, but AWS rejected them: $id"
+fi

@@ -6,13 +6,13 @@ A Claude Code workstation in your own GCP project, reachable over your tailnet, 
 
 ## Overview
 
-`devbox` makes a GCP project match `devbox.yaml`: an Ubuntu VM you reach over Tailscale SSH or mosh, with Claude Code, `gh`, Terraform, Go, Node, the Mermaid CLI (`mmdc`), uv, ruff, pytest and rootless Docker installed. Your work lives on `/srv/code`, a separate disk that is snapshotted daily and survives rebuilds. The box suspends itself after an hour idle and keeps its memory, so tmux and Claude Code sessions survive. It costs about $12 a month while suspended and about 15¢ an hour while running; see [Costs](#costs).
+`devbox` makes a GCP project match `devbox.yaml`: an Ubuntu VM you reach over Tailscale SSH or mosh, with Claude Code, `gh`, the AWS CLI, Terraform, Go, Node, the Mermaid CLI (`mmdc`), uv, ruff, pytest, shellcheck and rootless Docker installed. Your work lives on `/srv/code`, a separate disk that is snapshotted daily and survives rebuilds. The box suspends itself after an hour idle and keeps its memory, so tmux and Claude Code sessions survive. It costs about $12 a month while suspended and about 15¢ an hour while running; see [Costs](#costs).
 
 A dedicated SSH key in Secret Manager authenticates to GitHub and signs commits. Nobody has sudo on the box unless you opt into password sudo (see [Sudo](#sudo)), and agents are denied `git commit`, `git push` and applies.
 
 ### Security
 
-`devbox` is for one person in a GCP project of their own. It is not a sandbox. Agents run as you, so they can use anything you can: the machine key, project secrets, and any gcloud login on the box. The deny rules stop accidents, not a determined or prompt-injected agent. Give the machine key as little reach as you can (a machine user or deploy keys), and protect your branches.
+`devbox` is for one person in a GCP project of their own. It is not a sandbox. Agents run as you, so they can use anything you can: the machine key, project secrets, and any gcloud login or AWS keys on the box. The deny rules stop accidents, not a determined or prompt-injected agent. Give the machine key as little reach as you can (a machine user or deploy keys), and protect your branches.
 
 ### Costs
 
@@ -95,13 +95,15 @@ When your Google login expires, every `./devbox` command logs you in again first
 
 ```bash
 ./devbox project add git@github.com:acme/api.git --project acme --gcloud-config client-a --gcp-project acme-prod
-./devbox project add git@github.com:acme/web.git --project acme
+./devbox project add git@github.com:acme/web.git --project acme --aws-config acme --aws-region eu-west-1
 ./devbox project secret acme OPENAI_API_KEY --recreate   # prompts; stored in Secret Manager; restarts the session
 ```
 
 A project is a directory under `/srv/code` with its own tmux session, variables and secrets. Its repos, one or many, are subdirectories: here `/srv/code/acme/api` and `/srv/code/acme/web`. Start `claude` in the project root, where the session starts, so that one Claude Code session and its memory cover every repo. `devbox project add` writes a `CLAUDE.md` there listing the repos; say in it what each one is for. If the first repo you add has a `CLAUDE.md` of its own, the project's is a link to it instead, so git tracks it.
 
 Secrets are read from Secret Manager into the session's environment when it starts, never written to disk. `--recreate` restarts the project's session so it has the new secret, killing whatever runs there. Without it, run `devbox-sessions --recreate acme` on the box when convenient. Log a gcloud config in with `devbox-gcloud-login client-a` on the box.
+
+`--aws-config acme` points the project's sessions at the AWS account in `/srv/code/.aws/acme`, through `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE`. Store that account's access keypair with `devbox-aws-login acme` on the box. It prompts for the key ID and, hidden, the secret; checks them with STS; and prints the identity, whose account ID the statusline then shows. Outside a project, `aws` uses `~/.aws`, which is `/srv/code/.aws/default`. The keys are on the pet disk, mode 0600, and in its snapshots, as gcloud logins are. Give each keypair the narrowest IAM policy you can. To keep keys off disk, store `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` as project secrets instead.
 
 The non-secret variables also go into `.claude/settings.local.json`, in the project root and in each repo, for Claude Code started outside the session. Claude Code reads that file from the git root it starts in, never from a parent directory, hence the copies.
 

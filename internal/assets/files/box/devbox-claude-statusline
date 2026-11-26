@@ -3,7 +3,7 @@
 # /usr/local/bin/devbox-claude-statusline; in the devbox repo, .claude/statusline.sh
 # is a symlink to this file. Reads the session JSON on stdin and prints one line.
 #
-#   acme-api ⎇ main* ↑1  RC  client-a@acme-prod/europe-west2  adc ✓
+#   acme-api ⎇ main* ↑1  RC  client-a@acme-prod/europe-west2  adc ✓  aws:acme@123456789012/eu-west-1 keys ✓
 #   8%  31% 12% 20%  $0.42 12m +80/-12  Fable 5.1
 #
 # Segments, each omitted when it does not apply, never an error:
@@ -17,6 +17,8 @@
 #     that `devbox project` gave the session
 #   - whether Application Default Credentials exist in that gcloud config,
 #     which is what devbox and most SDKs authenticate with
+#   - in a project session with an AWS account: its name, account ID and
+#     region, and whether it has keys
 #   - on the box: how full /srv/code is, unlabelled (the alert fires at
 #     disk_used_pct)
 #   - context window, 5-hour and 7-day rate-limit meters, unlabelled, in that
@@ -140,6 +142,22 @@ if [ -f "${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}/application_default_credential
   segments+=("${DIM}adc${RESET} ✓")
 else
   segments+=("${RED}no ADC${RESET}")
+fi
+
+# AWS account, project session: its directory's name is the identity. The
+# account ID is what devbox-aws-login got back from STS; no network call here.
+if [ -n "${AWS_SHARED_CREDENTIALS_FILE:-}" ]; then
+  aws_dir=$(dirname "$AWS_SHARED_CREDENTIALS_FILE")
+  seg="aws:$(basename "$aws_dir")"
+  account=$(cut -f1 "$aws_dir/devbox-identity" 2>/dev/null || true)
+  [ -n "$account" ] && seg+="@$account"
+  [ -n "${AWS_REGION:-}" ] && seg+="/$AWS_REGION"
+  if grep -qE '^aws_access_key_id *= *[^ ]' "$AWS_SHARED_CREDENTIALS_FILE" 2>/dev/null; then
+    seg+=" ${DIM}keys${RESET} ✓"
+  else
+    seg+=" ${RED}no keys${RESET}"
+  fi
+  segments+=("$seg")
 fi
 
 # Box: the pet disk. The email alert fires at disk_used_pct, 85 by default.
