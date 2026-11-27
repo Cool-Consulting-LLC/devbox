@@ -48,6 +48,8 @@ var boxFiles = []boxFile{
 	{"box/devbox-agent-load-key", "/usr/local/sbin/devbox-agent-load-key", "0755"},
 	{"box/devbox-ssh-agent.conf", "/etc/systemd/system/devbox-ssh-agent.service.d/devbox-load-key.conf", "0644"},
 	{"box/needrestart.conf", "/etc/needrestart/conf.d/devbox.conf", "0644"},
+	{"box/apt-daily.timer.conf", "/etc/systemd/system/apt-daily.timer.d/devbox.conf", "0644"},
+	{"box/apt-daily-upgrade.timer.conf", "/etc/systemd/system/apt-daily-upgrade.timer.d/devbox.conf", "0644"},
 	{"box/aws-cli.asc", "/etc/devbox/aws-cli.asc", "0644"},
 	{"box/session-manager-plugin.asc", "/etc/devbox/session-manager-plugin.asc", "0644"},
 	{"box/devbox-enroll", "/usr/local/sbin/devbox-enroll", "0755"},

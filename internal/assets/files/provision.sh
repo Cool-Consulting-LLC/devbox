@@ -497,6 +497,11 @@ else
   echo "timezone $DEVBOX_TIMEZONE is not in /usr/share/zoneinfo; leaving $(timedatectl show -p Timezone --value)" >&2
 fi
 
+step apt-timers
+# The ssh-agent step's daemon-reload loaded the drop-ins; a restart makes the
+# timers compute their next run from the new schedule.
+systemctl restart apt-daily.timer apt-daily-upgrade.timer
+
 step motd
 # Quiet logins: no Ubuntu banner, legal notice, news or update nags. The
 # .bashrc prints what is worth knowing (uptime, tmux sessions).

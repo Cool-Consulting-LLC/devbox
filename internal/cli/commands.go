@@ -97,8 +97,8 @@ did not create admits the internet (see ` + "`devbox preflight`" + `), unless
 A new box: up waits for provisioning, showing its log, then logs you in once
 through IAP, which creates your account there. --first-login=false skips it.
 
-If metadata changed, up then reprovisions, as ` + "`devbox reprovision`" + ` does.
---reprovision=false skips it.
+If metadata changed, up says so and leaves it for ` + "`devbox reprovision`." + `
+--reprovision reprovisions then, as ` + "`devbox reprovision`" + ` does.
 
 If your Google login is missing or expired, up first runs
 ` + "`gcloud auth login --update-adc`" + `, as ` + "`make auth`" + ` does, when at a terminal.
@@ -172,7 +172,7 @@ that is up but off the tailnet is still a warning, not a failure.`,
 	cmd.Flags().BoolVar(&allowExposure, "allow-exposure", false, "go ahead even if firewall rules open the box to the internet")
 	cmd.Flags().BoolVar(&shareLogin, "share-login", true, "pass your Google login to the box's gcloud configs for the same account")
 	cmd.Flags().BoolVar(&firstLogin, "first-login", true, "on a new box, wait for provisioning and log in once through IAP")
-	cmd.Flags().BoolVar(&reprov, "reprovision", true, "reprovision when metadata changed")
+	cmd.Flags().BoolVar(&reprov, "reprovision", false, "reprovision when metadata changed")
 	return cmd
 }
 
